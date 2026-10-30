@@ -9,7 +9,7 @@ description = "Coffre de secrets local : interface Qt et CLI, sans affichage des
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["PySide6>=6.6", "cryptography>=42"]
+dependencies = ["PySide6>=6.6", "cryptography>=50.0.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
