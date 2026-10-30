@@ -50,7 +50,7 @@ jobs:
           Start-Sleep -Seconds 8
           if ($p.HasExited) { throw "vault-gui.exe a quitté avec le code $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vault-windows
           path: |
