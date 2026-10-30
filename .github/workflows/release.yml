@@ -90,6 +90,8 @@ jobs:
           Write-Output ("vault --help : {0:N1} s" -f $elapsed.TotalSeconds)
           $out = & dist/vault.exe list 2>&1 | Out-String
           if ($LASTEXITCODE -ne 1 -or $out -notmatch "pas ouverte") { throw "vault list sans application : code $LASTEXITCODE, sortie : $out" }
+          # Le code 1 de `vault list` est le résultat attendu : sans `exit 0`, GitHub le prendrait pour un échec de l'étape.
+          exit 0
       - name: Smoke test (the GUI starts and stays alive)
         if: matrix.flavor == 'gui'
         shell: pwsh
