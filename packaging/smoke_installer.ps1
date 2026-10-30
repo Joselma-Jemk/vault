@@ -41,6 +41,7 @@ Assert-True ($LASTEXITCODE -eq 0 -and $help -match "Coffre de secrets") "vault -
 Write-Output "OK  vault --help"
 
 # 4. Simule ce que fait l'application : démarrage automatique et coffre de l'utilisateur.
+New-Item -Path $runKey -Force | Out-Null  # absente sur une machine neuve
 Set-ItemProperty -Path $runKey -Name "Vault" -Value "`"$installDir\vault-gui.exe`""
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 Set-Content -Path (Join-Path $dataDir "vault.enc") -Value "donnees-utilisateur-a-conserver"
