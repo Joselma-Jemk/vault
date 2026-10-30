@@ -11,6 +11,9 @@ Please **do not open a public issue** for a security problem.
 Report it privately through GitHub: open the **Security** tab of the repository and choose
 **Report a vulnerability** (private vulnerability reporting).
 
+If you cannot use GitHub, write to **contact@joselma.online** instead. Do not put exploit details in a
+public place, and do not include real secrets in your report.
+
 Include, if you can:
 
 - the version or commit you tested,

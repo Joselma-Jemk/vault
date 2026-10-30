@@ -1,7 +1,8 @@
 name: release
 
-# Un tag `v*` compile le binaire Windows avec Nuitka et publie une release.
-# Le lancement manuel (workflow_dispatch) compile seulement, sans rien publier : pratique pour vérifier le build.
+# Un tag `v*` construit les binaires Windows (Nuitka), l'installateur (Inno Setup) et le zip portable,
+# les teste, puis publie une release. Le lancement manuel (workflow_dispatch) construit et teste tout
+# sans rien publier : pratique pour vérifier le build.
 on:
   push:
     tags: ["v*"]
@@ -11,8 +12,47 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        shell: bash
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Le tag $GITHUB_REF_NAME ne correspond pas à la version $version de pyproject.toml" >&2
+            exit 1
+          fi
+
+  test:
     runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  build:
+    needs: [check-version]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Interface : pas de console. Ligne de commande : console, pour que la sortie s'affiche.
+          - flavor: gui
+            output: vault-gui.exe
+            console: disable
+          - flavor: cli
+            output: vault.exe
+            console: force
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -21,32 +61,37 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install -e ".[dev]" nuitka
-      - name: Test
-        run: python -m pytest -q
       - name: Build binary (Nuitka)
         run: >
           python -m nuitka
           --onefile
-          --windows-console-mode=disable
+          --windows-console-mode=${{ matrix.console }}
           --enable-plugin=pyside6
           --include-package=vault
           --include-package-data=vault
           --windows-icon-from-ico=src/vault/assets/vault.ico
           --assume-yes-for-downloads
+          --company-name=Joselma00
           --product-name=Vault
-          --product-version=0.1.0
-          --file-version=0.1.0
+          --product-version=${{ needs.check-version.outputs.version }}
+          --file-version=${{ needs.check-version.outputs.version }}
           --file-description="Local secrets vault"
           --output-dir=dist
-          --output-filename=vault-gui.exe
+          --output-filename=${{ matrix.output }}
           packaging/launcher.py
-      - name: Checksum
+      - name: Smoke test (CLI prints to the console and fails cleanly without the app)
+        if: matrix.flavor == 'cli'
         shell: pwsh
+        env:
+          VAULT_HOME: ${{ runner.temp }}\vault-smoke
         run: |
-          $hash = (Get-FileHash dist/vault-gui.exe -Algorithm SHA256).Hash.ToLower()
-          # Fins de ligne Unix : `sha256sum -c SHA256SUMS` doit fonctionner tel quel.
-          [System.IO.File]::WriteAllText((Join-Path $PWD "dist/SHA256SUMS"), "$hash  vault-gui.exe`n")
-      - name: Smoke test (the binary starts and stays alive)
+          $elapsed = Measure-Command { $help = & dist/vault.exe --help | Out-String }
+          if ($LASTEXITCODE -ne 0 -or $help -notmatch "Coffre de secrets") { throw "vault --help a échoué : $help" }
+          Write-Output ("vault --help : {0:N1} s" -f $elapsed.TotalSeconds)
+          $out = & dist/vault.exe list 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch "pas ouverte") { throw "vault list sans application : code $LASTEXITCODE, sortie : $out" }
+      - name: Smoke test (the GUI starts and stays alive)
+        if: matrix.flavor == 'gui'
         shell: pwsh
         env:
           VAULT_HOME: ${{ runner.temp }}\vault-smoke
@@ -57,15 +102,61 @@ jobs:
           Stop-Process -Id $p.Id -Force
       - uses: actions/upload-artifact@v7
         with:
+          name: bin-${{ matrix.flavor }}
+          path: dist/${{ matrix.output }}
+          if-no-files-found: error
+
+  package:
+    needs: [check-version, test, build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: dist
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$version" "/DGuiExe=$PWD\dist\vault-gui.exe" "/DCliExe=$PWD\dist\vault.exe" packaging\vault.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC a échoué (code $LASTEXITCODE)" }
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          Compress-Archive -Path dist/vault-gui.exe, dist/vault.exe, LICENSE -DestinationPath "dist/vault-$version-windows-portable.zip"
+      - name: Test the installer (install, PATH, command, uninstall, user data kept)
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          ./packaging/smoke_installer.ps1 -Setup "$PWD\dist\vault-$version-windows-setup.exe"
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $lines = foreach ($name in "vault-$version-windows-setup.exe", "vault-$version-windows-portable.zip") {
+            "{0}  {1}" -f (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower(), $name
+          }
+          # Fins de ligne Unix : `sha256sum -c SHA256SUMS` doit fonctionner tel quel.
+          [System.IO.File]::WriteAllText((Join-Path $PWD "dist/SHA256SUMS"), (($lines -join "`n") + "`n"))
+      - uses: actions/upload-artifact@v7
+        with:
           name: vault-windows
           path: |
-            dist/vault-gui.exe
+            dist/vault-*-windows-setup.exe
+            dist/vault-*-windows-portable.zip
             dist/SHA256SUMS
+          if-no-files-found: error
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            dist/vault-gui.exe
+            dist/vault-*-windows-setup.exe
+            dist/vault-*-windows-portable.zip
             dist/SHA256SUMS
           generate_release_notes: true

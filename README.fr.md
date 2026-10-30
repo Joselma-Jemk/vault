@@ -30,11 +30,23 @@ Ce que Vault protège et ce qu'il ne protège pas est décrit dans [THREAT_MODEL
 
 ## Installation
 
-Windows, Python 3.13 ou plus récent.
+**Installateur (recommandé).** Télécharge `vault-<version>-windows-setup.exe` sur la page
+[Releases](https://github.com/Joselma-Jemk/vault/releases) et lance-le. Il s'installe pour l'utilisateur
+courant, sans droits administrateur, et ajoute la commande `vault` au `PATH` (tu peux décocher cette option).
+La désinstallation ne supprime jamais ton coffre (`%APPDATA%\Vault`).
+
+**Portable.** Décompresse `vault-<version>-windows-portable.zip` où tu veux : il contient `vault-gui.exe`
+(l'application) et `vault.exe` (la ligne de commande).
+
+Vérifie un téléchargement avec `sha256sum -c SHA256SUMS` (le fichier est joint à chaque release).
+
+**Depuis les sources.** Windows, Python 3.13 ou plus récent.
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
+
+Les binaires ne sont pas encore signés : Windows SmartScreen peut afficher un avertissement au premier lancement.
 
 ## Utilisation
 
@@ -81,6 +93,10 @@ Les tests tournent sans écran.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md) : signale les failles en privé.
+
+## Contact
+
+contact@joselma.online
 
 ## Licence
 

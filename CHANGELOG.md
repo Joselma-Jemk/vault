@@ -13,6 +13,9 @@ First public version.
 - Clipboard copy with automatic clearing after 15 seconds.
 - Tray icon, optional launch at Windows startup.
 - Logo, used as the window, tray and executable icon.
+- Windows installer (Inno Setup, per-user, no administrator rights) with the `vault` command added to the PATH,
+  and a portable zip. Both ship `vault-gui.exe` (application) and `vault.exe` (command line). Uninstalling
+  never deletes the vault.
 - Delay after repeated wrong master passwords.
 - Refusals stop being displayed after 5 in a row, for 2 minutes.
 - Encryption format v2: scrypt parameters stored and authenticated; format v1 files still open.
