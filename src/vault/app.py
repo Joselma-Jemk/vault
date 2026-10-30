@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -40,6 +41,7 @@ from vault.policy import (
 from vault.session import SessionLockFilter, register_session_notifications
 from vault.store import MIN_PASSWORD_LENGTH, VaultError, VaultStore, validate_name
 
+ICON_PATH = Path(__file__).parent / "assets" / "vault.png"
 APPROVAL_TIMEOUT_MS = 60_000
 TICK_MS = 5_000
 ACTIVITY_EVENTS = {
@@ -48,6 +50,13 @@ ACTIVITY_EVENTS = {
     QEvent.Type.KeyPress,
     QEvent.Type.Wheel,
 }
+
+
+def app_icon() -> QIcon:
+    """Icône de l'application. Repli sur une icône du système si le fichier est introuvable."""
+    if ICON_PATH.exists():
+        return QIcon(str(ICON_PATH))
+    return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
 
 
 # --- dialogues ---------------------------------------------------------------
@@ -290,8 +299,7 @@ class MainWindow(QMainWindow):
         self._tray: QSystemTrayIcon | None = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        self._tray = QSystemTrayIcon(icon, self)
+        self._tray = QSystemTrayIcon(app_icon(), self)
         menu = QMenu(self)
         menu.addAction(_action(self, "Ouvrir", self.show_window))
         menu.addAction(_action(self, "Verrouiller", self.lock))
@@ -459,7 +467,7 @@ def attach(server: BrokerServer, store: VaultStore, window: QWidget) -> None:
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Vault")
-    app.setWindowIcon(app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+    app.setWindowIcon(app_icon())
     server = BrokerServer()
     try:
         server.start()

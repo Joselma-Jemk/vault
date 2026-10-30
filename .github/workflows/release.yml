@@ -30,6 +30,8 @@ jobs:
           --windows-console-mode=disable
           --enable-plugin=pyside6
           --include-package=vault
+          --include-package-data=vault
+          --windows-icon-from-ico=src/vault/assets/vault.ico
           --assume-yes-for-downloads
           --product-name=Vault
           --product-version=0.1.0

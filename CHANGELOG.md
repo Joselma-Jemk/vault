@@ -12,6 +12,7 @@ First public version.
 - Master password change, with verification of the current password.
 - Clipboard copy with automatic clearing after 15 seconds.
 - Tray icon, optional launch at Windows startup.
+- Logo, used as the window, tray and executable icon.
 - Delay after repeated wrong master passwords.
 - Refusals stop being displayed after 5 in a row, for 2 minutes.
 - Encryption format v2: scrypt parameters stored and authenticated; format v1 files still open.

@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from vault import audit, session
-from vault.app import AuditDialog, MainWindow
+from vault.app import ICON_PATH, AuditDialog, MainWindow, app_icon
 from vault.ipc import BrokerServer
 from vault.store import VaultStore
 
@@ -68,6 +68,14 @@ def test_audit_dialog_lists_entries_without_values(window: MainWindow, tmp_path:
     assert table.rowCount() == 1
     dump = "".join(table.item(0, c).text() for c in range(table.columnCount()))
     assert "GH_TOKEN" in dump and SECRET not in dump
+
+
+def test_app_icon_is_the_packaged_logo(qapp: QApplication) -> None:
+    assert ICON_PATH.exists()
+    assert ICON_PATH.with_suffix(".ico").exists()  # utilisé par la compilation Nuitka pour l'exécutable
+    icon = app_icon()
+    assert not icon.isNull()
+    assert not icon.pixmap(32, 32).isNull()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="message de session Windows uniquement")

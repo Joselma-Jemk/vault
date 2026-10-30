@@ -1,5 +1,7 @@
 # Vault
 
+<p align="center"><img src="src/vault/assets/vault.png" alt="Logo de Vault" width="128"></p>
+
 Coffre de secrets local pour Windows. Une interface Qt pour enregistrer les clés et les jetons,
 une CLI pour que toi ou un agent puissiez **les utiliser sans jamais voir leurs valeurs**.
 

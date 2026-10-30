@@ -1,5 +1,7 @@
 # Vault
 
+<p align="center"><img src="src/vault/assets/vault.png" alt="Vault logo" width="128"></p>
+
 A local secrets vault for Windows. A Qt desktop app stores your API keys and tokens. A command
 line tool lets you (or an AI agent) **use** them without ever seeing their values.
 
