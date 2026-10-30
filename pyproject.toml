@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vault"
+version = "0.1.0"
+description = "Coffre de secrets local : interface Qt et CLI, sans affichage des valeurs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["PySide6>=6.6", "cryptography>=42"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+vault = "vault.cli:main"
+
+[project.gui-scripts]
+vault-gui = "vault.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
