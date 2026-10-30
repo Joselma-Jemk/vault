@@ -1,17 +1,18 @@
 ; Installateur Windows de Vault (Inno Setup 6).
 ; Construit par le CI :
-;   iscc /DAppVersion=0.1.0 /DGuiExe=dist\vault-gui.exe /DCliExe=dist\vault.exe packaging\vault.iss
+;   iscc /DAppVersion=0.1.2 /DGuiDir=dist\bin-gui /DCliDir=dist\bin-cli packaging\vault.iss
+; GuiDir et CliDir sont les dossiers produits par Nuitka en mode « standalone » (pas de fichier unique).
 ; Sans droits administrateur par défaut (installation pour l'utilisateur courant), droits admin proposés au choix.
 ; Les données de l'utilisateur (%APPDATA%\Vault : coffre chiffré et journal) ne sont JAMAIS supprimées à la désinstallation.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
-#ifndef GuiExe
-  #define GuiExe "..\dist\vault-gui.exe"
+#ifndef GuiDir
+  #define GuiDir "..\dist\bin-gui"
 #endif
-#ifndef CliExe
-  #define CliExe "..\dist\vault.exe"
+#ifndef CliDir
+  #define CliDir "..\dist\bin-cli"
 #endif
 
 [Setup]
@@ -51,9 +52,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Ajouter la commande « vault » au PATH (vault list, vault run… dans un terminal)"; GroupDescription: "Ligne de commande :"
 
 [Files]
-Source: "{#GuiExe}"; DestDir: "{app}"; DestName: "vault-gui.exe"; Flags: ignoreversion
+; Dossiers complets (exécutable + bibliothèques Python et Qt). L'interface est à la racine de Vault.
+Source: "{#GuiDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; La commande est toujours installée ; la tâche « addtopath » décide seulement si son dossier entre dans le PATH.
-Source: "{#CliExe}"; DestDir: "{app}\bin"; DestName: "vault.exe"; Flags: ignoreversion
+Source: "{#CliDir}\*"; DestDir: "{app}\bin"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

@@ -1,8 +1,8 @@
 name: release
 
-# Un tag `v*` construit les binaires Windows (Nuitka), l'installateur (Inno Setup) et le zip portable,
-# les teste, puis publie une release. Le lancement manuel (workflow_dispatch) construit et teste tout
-# sans rien publier : pratique pour vérifier le build.
+# Un tag `v*` construit les binaires Windows (Nuitka, en dossier : pas d'extraction dans un dossier temporaire,
+# que les antivirus signalent moins souvent), l'installateur (Inno Setup) et le zip portable, les teste, puis
+# publie une release. Le lancement manuel (workflow_dispatch) construit et teste tout sans rien publier.
 on:
   push:
     tags: ["v*"]
@@ -61,10 +61,10 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install -e ".[dev]" nuitka
-      - name: Build binary (Nuitka)
+      - name: Build binary folder (Nuitka, standalone)
         run: >
           python -m nuitka
-          --onefile
+          --standalone
           --windows-console-mode=${{ matrix.console }}
           --enable-plugin=pyside6
           --include-package=vault
@@ -76,7 +76,7 @@ jobs:
           --product-version=${{ needs.check-version.outputs.version }}
           --file-version=${{ needs.check-version.outputs.version }}
           --file-description="Local secrets vault"
-          --output-dir=dist
+          --output-dir=dist/${{ matrix.flavor }}
           --output-filename=${{ matrix.output }}
           packaging/launcher.py
       - name: Smoke test (CLI prints to the console and fails cleanly without the app)
@@ -85,10 +85,11 @@ jobs:
         env:
           VAULT_HOME: ${{ runner.temp }}\vault-smoke
         run: |
-          $elapsed = Measure-Command { $help = & dist/vault.exe --help | Out-String }
+          $exe = "dist/cli/launcher.dist/vault.exe"
+          $elapsed = Measure-Command { $help = & $exe --help | Out-String }
           if ($LASTEXITCODE -ne 0 -or $help -notmatch "Coffre de secrets") { throw "vault --help a échoué : $help" }
           Write-Output ("vault --help : {0:N1} s" -f $elapsed.TotalSeconds)
-          $out = & dist/vault.exe list 2>&1 | Out-String
+          $out = & $exe list 2>&1 | Out-String
           if ($LASTEXITCODE -ne 1 -or $out -notmatch "pas ouverte") { throw "vault list sans application : code $LASTEXITCODE, sortie : $out" }
           # Le code 1 de `vault list` est le résultat attendu : sans `exit 0`, GitHub le prendrait pour un échec de l'étape.
           exit 0
@@ -98,14 +99,14 @@ jobs:
         env:
           VAULT_HOME: ${{ runner.temp }}\vault-smoke
         run: |
-          $p = Start-Process -FilePath dist/vault-gui.exe -PassThru
+          $p = Start-Process -FilePath dist/gui/launcher.dist/vault-gui.exe -PassThru
           Start-Sleep -Seconds 8
           if ($p.HasExited) { throw "vault-gui.exe a quitté avec le code $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
       - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.flavor }}
-          path: dist/${{ matrix.output }}
+          path: dist/${{ matrix.flavor }}/launcher.dist
           if-no-files-found: error
 
   package:
@@ -116,7 +117,6 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           pattern: bin-*
-          merge-multiple: true
           path: dist
       - name: Build installer (Inno Setup)
         shell: pwsh
@@ -124,13 +124,18 @@ jobs:
           $version = "${{ needs.check-version.outputs.version }}"
           $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc "/DAppVersion=$version" "/DGuiExe=$PWD\dist\vault-gui.exe" "/DCliExe=$PWD\dist\vault.exe" packaging\vault.iss
+          & $iscc "/DAppVersion=$version" "/DGuiDir=$PWD\dist\bin-gui" "/DCliDir=$PWD\dist\bin-cli" packaging\vault.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC a échoué (code $LASTEXITCODE)" }
       - name: Build portable zip
         shell: pwsh
         run: |
           $version = "${{ needs.check-version.outputs.version }}"
-          Compress-Archive -Path dist/vault-gui.exe, dist/vault.exe, LICENSE -DestinationPath "dist/vault-$version-windows-portable.zip"
+          $stage = "dist/portable"
+          New-Item -ItemType Directory -Force -Path "$stage/bin" | Out-Null
+          Copy-Item -Path dist/bin-gui/* -Destination $stage -Recurse
+          Copy-Item -Path dist/bin-cli/* -Destination "$stage/bin" -Recurse
+          Copy-Item -Path LICENSE -Destination $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/vault-$version-windows-portable.zip"
       - name: Test the installer (install, PATH, command, uninstall, user data kept)
         shell: pwsh
         run: |

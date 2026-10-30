@@ -16,8 +16,8 @@ def test_pyproject_version_matches_package_version() -> None:
 
 def test_installer_ships_both_binaries_and_the_logo() -> None:
     script = (ROOT / "packaging" / "vault.iss").read_text(encoding="utf-8")
-    assert 'DestName: "vault-gui.exe"' in script
-    assert 'DestName: "vault.exe"' in script
+    assert 'Source: "{#GuiDir}\\*"; DestDir: "{app}"' in script
+    assert 'Source: "{#CliDir}\\*"; DestDir: "{app}\\bin"' in script
     assert "SetupIconFile=..\\src\\vault\\assets\\vault.ico" in script
 
 

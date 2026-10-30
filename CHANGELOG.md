@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Build: the executables are now compiled as folders (Nuitka standalone) instead of single files. The single-file
+  build was flagged by Windows Defender as a false positive (`Program:Win32/Contebrew.A!ml`), because it extracts a
+  DLL into a temporary folder at each launch. The installer and the portable zip now ship the whole folders.
+
 ## 0.1.1
 
 - Fix: the logo was not shown in the window and taskbar. The window now reads it from the package,
