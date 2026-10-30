@@ -206,6 +206,24 @@ def test_cancelling_unlock_quits(window: MainWindow, monkeypatch) -> None:
 # --- démarrage -----------------------------------------------------------------------------
 
 
+def test_second_instance_is_refused_while_first_still_listens(qapp, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_HOME", str(tmp_path))
+    monkeypatch.setattr("vault.ipc.server_name", lambda: "vault-test-deux-instances")
+    first = BrokerServer()
+    first.start()
+    try:
+        second = BrokerServer()
+        with pytest.raises(RuntimeError, match="déjà ouvert"):
+            second.start()
+    finally:
+        first.stop()
+
+
+def test_logo_is_read_from_the_package() -> None:
+    data = app_module._logo_bytes()
+    assert data is not None and data.startswith(b"\x89PNG")
+
+
 def test_second_instance_shows_message_and_exits(qapp, monkeypatch) -> None:
     shown: list[str] = []
 

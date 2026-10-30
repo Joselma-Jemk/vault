@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sys
 import time
+from importlib import resources
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -52,11 +53,29 @@ ACTIVITY_EVENTS = {
 }
 
 
-def app_icon() -> QIcon:
-    """Icône de l'application. Repli sur une icône du système si le fichier est introuvable."""
-    if ICON_PATH.exists():
-        return QIcon(str(ICON_PATH))
-    return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+def app_icon() -> QIcon | None:
+    """Logo lu dans le paquet, y compris dans l'exécutable compilé. None si introuvable.
+
+    Dans ce cas on ne pose aucune icône : Windows affiche alors celle qui est intégrée à l'exécutable.
+    Une icône générique du système serait pire qu'aucune.
+    """
+    data = _logo_bytes()
+    if data is None:
+        return None
+    pixmap = QPixmap()
+    if not pixmap.loadFromData(data):
+        return None
+    return QIcon(pixmap)
+
+
+def _logo_bytes() -> bytes | None:
+    try:
+        return resources.files("vault").joinpath("assets").joinpath("vault.png").read_bytes()
+    except (OSError, ModuleNotFoundError, TypeError):
+        pass
+    if ICON_PATH.exists():  # lancement depuis les sources, sans passer par le paquet
+        return ICON_PATH.read_bytes()
+    return None
 
 
 # --- dialogues ---------------------------------------------------------------
@@ -299,7 +318,8 @@ class MainWindow(QMainWindow):
         self._tray: QSystemTrayIcon | None = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        self._tray = QSystemTrayIcon(app_icon(), self)
+        icon = app_icon() or QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self._tray = QSystemTrayIcon(icon, self)  # la zone de notification exige une icône : repli seulement ici
         menu = QMenu(self)
         menu.addAction(_action(self, "Ouvrir", self.show_window))
         menu.addAction(_action(self, "Verrouiller", self.lock))
@@ -467,7 +487,9 @@ def attach(server: BrokerServer, store: VaultStore, window: QWidget) -> None:
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Vault")
-    app.setWindowIcon(app_icon())
+    icon = app_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
     server = BrokerServer()
     try:
         server.start()

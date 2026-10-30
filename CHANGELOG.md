@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Fix: the logo was not shown in the window and taskbar. The window now reads it from the package,
+  including in the compiled executable, and no longer falls back to a generic Windows icon.
+- Fix: a second instance of Vault could silently take over the local channel of the first one. It is now
+  refused with a message.
+
 ## 0.1.0
 
 First public version.

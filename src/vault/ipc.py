@@ -40,7 +40,10 @@ class BrokerServer(QObject):
         self._server.newConnection.connect(self._on_connection)
 
     def start(self) -> None:
-        QLocalServer.removeServer(server_name())
+        if _is_listening(server_name()):
+            # Une autre instance répond déjà : on ne prend pas sa place, on signale le conflit.
+            raise RuntimeError("Vault est déjà ouvert")
+        QLocalServer.removeServer(server_name())  # reste d'une instance fermée brutalement
         if not self._server.listen(server_name()):
             raise RuntimeError(f"Canal local indisponible : {self._server.errorString()}")
 
@@ -84,6 +87,15 @@ class BrokerServer(QObject):
         except Exception:  # noqa: BLE001 - la CLI doit toujours recevoir une réponse, jamais attendre
             _log_error()
             return {"ok": False, "error": "Erreur interne du coffre (détails dans error.log)"}
+
+
+def _is_listening(name: str) -> bool:
+    """Vrai si un serveur répond déjà sous ce nom (une autre instance de Vault)."""
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    connected = probe.waitForConnected(300)
+    probe.abort()
+    return connected
 
 
 def _log_error() -> None:
