@@ -30,7 +30,7 @@ Ce que Vault protège et ce qu'il ne protège pas est décrit dans [THREAT_MODEL
 
 ## Installation
 
-Windows, Python 3.10 ou plus récent.
+Windows, Python 3.13 ou plus récent.
 
 ```bash
 python -m pip install -e ".[dev]"

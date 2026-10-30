@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - name: Install
         run: python -m pip install -e ".[dev]" nuitka
@@ -44,7 +44,8 @@ jobs:
         shell: pwsh
         run: |
           $hash = (Get-FileHash dist/vault-gui.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  vault-gui.exe" | Out-File -Encoding ascii dist/SHA256SUMS
+          # Fins de ligne Unix : `sha256sum -c SHA256SUMS` doit fonctionner tel quel.
+          [System.IO.File]::WriteAllText((Join-Path $PWD "dist/SHA256SUMS"), "$hash  vault-gui.exe`n")
       - name: Smoke test (the binary starts and stays alive)
         shell: pwsh
         env:

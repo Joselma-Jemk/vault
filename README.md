@@ -30,7 +30,7 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) for what Vault does and does not protect
 
 ## Installation
 
-Requires Python 3.10 or newer, on Windows.
+Requires Python 3.13 or newer, on Windows.
 
 ```bash
 python -m pip install -e ".[dev]"
