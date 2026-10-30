@@ -2,10 +2,18 @@
 
 import sys
 
-from vault.app import main as gui_main
-from vault.cli import main as cli_main
+
+def run(argv: list[str] | None = None) -> int:
+    """Sans argument, ouvre l'interface. Avec des arguments, exécute la commande de la CLI."""
+    args = sys.argv[1:] if argv is None else argv
+    if args:
+        from vault.cli import main as cli_main
+
+        return cli_main(args)
+    from vault.app import main as gui_main
+
+    return gui_main()
+
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        raise SystemExit(cli_main(sys.argv[1:]))
-    raise SystemExit(gui_main())
+    raise SystemExit(run())

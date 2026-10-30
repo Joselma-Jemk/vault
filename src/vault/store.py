@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -12,6 +13,8 @@ from pathlib import Path
 from vault import crypto
 
 NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MIN_PASSWORD_LENGTH = 8
+MAX_VALUE_LENGTH = 16 * 1024
 
 
 class VaultError(Exception):
@@ -39,6 +42,20 @@ def validate_name(name: str) -> str:
     return name
 
 
+def validate_value(value: str) -> str:
+    if not value:
+        raise VaultError("La valeur ne peut pas être vide")
+    if len(value.encode("utf-8")) > MAX_VALUE_LENGTH:
+        raise VaultError(f"La valeur dépasse {MAX_VALUE_LENGTH // 1024} Ko")
+    return value
+
+
+def validate_password(password: str) -> str:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise VaultError(f"Le mot de passe doit faire {MIN_PASSWORD_LENGTH} caractères minimum")
+    return password
+
+
 class VaultStore:
     """Coffre déverrouillé. Les valeurs ne vivent qu'en mémoire, jamais sur le disque en clair."""
 
@@ -53,7 +70,7 @@ class VaultStore:
     def create(cls, path: Path, password: str) -> VaultStore:
         if path.exists():
             raise VaultError("Un coffre existe déjà à cet emplacement")
-        store = cls(path, password, {})
+        store = cls(path, validate_password(password), {})
         store.save()
         return store
 
@@ -61,8 +78,11 @@ class VaultStore:
     def open(cls, path: Path, password: str) -> VaultStore:
         blob = json.loads(path.read_text(encoding="utf-8"))
         plaintext = crypto.decrypt(blob, password)
-        raw = json.loads(plaintext.decode("utf-8"))
-        entries = {name: Entry(**data) for name, data in raw["entries"].items()}
+        try:
+            raw = json.loads(plaintext.decode("utf-8"))
+            entries = {name: Entry(**data) for name, data in raw["entries"].items()}
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise VaultError("Contenu du coffre illisible") from exc
         return cls(path, password, entries)
 
     @classmethod
@@ -84,7 +104,7 @@ class VaultStore:
         ]
 
     def get_value(self, name: str) -> str:
-        """Valeur d'une entrée. Réservé au courtier, jamais exposé à la CLI."""
+        """Valeur d'une entrée. Réservé au courtier et à la copie dans l'interface, jamais à la CLI."""
         try:
             return self._entries[name].value
         except KeyError as exc:
@@ -97,8 +117,7 @@ class VaultStore:
 
     def set(self, name: str, value: str) -> None:
         validate_name(name)
-        if not value:
-            raise VaultError("La valeur ne peut pas être vide")
+        validate_value(value)
         now = now_iso()
         previous = self._entries.get(name)
         created = previous.created if previous else now
@@ -117,17 +136,27 @@ class VaultStore:
             self._entries[name].last_used = now_iso()
             self.save()
 
+    def change_password(self, current: str, new: str) -> None:
+        """Change le mot de passe maître. Exige l'ancien, et ne le remplace qu'après écriture réussie."""
+        if not hmac.compare_digest(current.encode("utf-8"), self._password.encode("utf-8")):
+            raise VaultError("Mot de passe actuel incorrect")
+        validate_password(new)
+        previous = self._password
+        self._password = new
+        try:
+            self.save()
+        except OSError:
+            self._password = previous
+            raise
+
     def save(self) -> None:
         raw = {"entries": {name: vars(entry) for name, entry in self._entries.items()}}
         plaintext = json.dumps(raw, ensure_ascii=False).encode("utf-8")
         blob = crypto.encrypt(plaintext, self._password)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(blob), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(blob))
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, self._path)
-
-    def change_password(self, new_password: str) -> None:
-        if not new_password:
-            raise VaultError("Le mot de passe ne peut pas être vide")
-        self._password = new_password
-        self.save()

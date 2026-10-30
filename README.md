@@ -1,49 +1,85 @@
 # Vault
 
-Coffre de secrets local, pour Windows. Une interface Qt pour enregistrer les clés, une CLI pour que
-Claude (ou toi) puisse les **utiliser sans jamais les voir**.
+A local secrets vault for Windows. A Qt desktop app stores your API keys and tokens. A command
+line tool lets you (or an AI agent) **use** them without ever seeing their values.
 
-## Principe
+> Français : see [README.fr.md](README.fr.md).
 
-- L'application Qt est le seul endroit où une valeur est déchiffrée et affichée (à la saisie).
-- La CLI n'a aucune commande qui renvoie une valeur. Elle envoie une demande à l'application ouverte.
-- Chaque utilisation d'une clé demande ton accord dans une fenêtre, avec la commande exacte. Refus par défaut, refus automatique après 60 s.
-- La valeur est masquée (`***`) dans la sortie des commandes lancées, y compris en base64.
-- Le journal (`audit.jsonl`) enregistre qui a demandé quoi, quand, et la décision. Jamais la valeur.
+## Principles
+
+- The desktop app is the only place where a value is decrypted for display or copy.
+- The CLI has no command that prints a value. It sends a request to the open application.
+- Every use of a secret asks you for approval, showing the exact command. Refusal is the default,
+  and the request is refused automatically after 60 seconds.
+- You can allow the same exact command for 10 minutes, to avoid being asked repeatedly.
+- Values are masked (`***`) in the output of launched commands, in raw and base64 form.
+- The audit log records who asked for what, when, and the decision. It never records values.
+
+Read [THREAT_MODEL.md](THREAT_MODEL.md) for what Vault does and does not protect.
+
+## Features
+
+- Create a vault with a master password, change it later.
+- Add, edit, copy, delete and search entries. Copies are cleared from the clipboard after 15 seconds.
+- Automatic lock after 5 minutes of inactivity, after a Windows sleep, and when you lock Windows.
+- Tray icon, and optional start with Windows.
+- Journal viewer inside the application.
+- Delay after repeated wrong master passwords.
 
 ## Installation
+
+Requires Python 3.10 or newer, on Windows.
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-## Utilisation
+## Usage
 
-1. Lance l'interface : `vault-gui` (ou `python -m vault`). Crée le coffre au premier lancement, avec un mot de passe maître (8 caractères minimum). Laisse la fenêtre ouverte : la CLI n'utilise l'application qu'ouverte et déverrouillée.
-2. Ajoute une entrée avec **Ajouter** (nom, puis valeur masquée).
-3. Depuis un terminal :
+1. Open the application: `vault gui` (or `vault-gui`, or `python -m vault`).
+   The first launch creates the vault and asks for a master password (8 characters minimum).
+   Keep the application open: the CLI only works while it is open and unlocked.
+2. Add an entry with **Ajouter** (name, then value).
+3. From a terminal:
 
 ```bash
 vault list
-vault gh-secret GH_TOKEN --repo proprietaire/depot
-vault run GH_TOKEN MA_VARIABLE -- python script.py
+vault gh-secret GH_TOKEN --repo owner/repo
+vault run GH_TOKEN GH_TOKEN -- gh api user
 ```
 
-## Stockage
+`vault run NAME ENV_VAR -- command` starts `command` with the value in the environment variable
+`ENV_VAR`. The value never appears in the command line.
 
-- `%APPDATA%\Vault\vault.enc` : toutes les entrées, chiffrées en AES-256-GCM, clé dérivée du mot de passe maître par scrypt.
-- `%APPDATA%\Vault\audit.jsonl` : journal sans valeurs.
-- `VAULT_HOME` permet de changer ce dossier.
+## Storage
 
-## Tests
+- `%APPDATA%\Vault\vault.enc`: all entries, encrypted with AES-256-GCM. The key is derived from the
+  master password with scrypt. Set `VAULT_HOME` to choose another folder.
+- `%APPDATA%\Vault\audit.jsonl`: the audit log, without values.
+
+## Development
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m pytest
+python -m ruff check src tests --select E,F,W,I --ignore E501
 ```
 
-## Limites connues (v1)
+The tests run without a screen.
 
-- Le mot de passe maître ne se change pas encore depuis l'interface (il faudra recréer le coffre).
-- Pas de verrouillage automatique par inactivité : utilise **Verrouiller**.
-- Une entrée déjà envoyée à une commande (`vault run`) peut être affichée par cette commande si elle la sort telle quelle en dehors de la sortie standard (fichier écrit, réseau). Le masquage ne couvre que stdout et stderr.
-- Un programme qui tourne avec ta session Windows et lit la mémoire de l'application peut récupérer une valeur déverrouillée. Le coffre protège contre les fuites et les erreurs, pas contre un attaquant déjà présent sur ta machine.
+## Limits
+
+- Windows only.
+- A program running as your user, while the vault is unlocked, can reach the broker and the
+  application memory. See [THREAT_MODEL.md](THREAT_MODEL.md).
+- Masking covers standard output and standard error only. Read each approval dialog carefully.
+- Keep your own backups of `vault.enc`.
+
+## Contributing and security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md): report vulnerabilities privately.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

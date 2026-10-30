@@ -8,7 +8,7 @@ import pytest
 from vault import crypto
 from vault.store import VaultError, VaultStore, validate_name
 
-SECRET = "ghp_SECRET_VALUE_12345"
+SECRET = "tok_SECRET_VALUE_12345"
 
 
 def test_round_trip_and_no_plaintext_on_disk(tmp_path: Path) -> None:

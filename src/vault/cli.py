@@ -1,4 +1,4 @@
-"""CLI : trois commandes, toutes déléguées à l'application. Aucune ne renvoie une valeur."""
+"""CLI : commandes déléguées à l'application, sauf `gui`. Aucune ne renvoie une valeur."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
     sub.add_parser("list", help="Liste les noms et les dates (jamais les valeurs)")
+    sub.add_parser("gui", help="Ouvre l'interface graphique du coffre")
 
     gh = sub.add_parser("gh-secret", help="Pose un secret GitHub Actions avec une valeur du coffre")
     gh.add_argument("name", help="Nom de l'entrée dans le coffre")
@@ -29,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.subcommand == "gui":
+            # Qt n'est importé que pour cette commande : les autres restent instantanées.
+            from vault.app import main as gui_main
+
+            return gui_main()
         if args.subcommand == "list":
             return _list()
         if args.subcommand == "gh-secret":

@@ -24,6 +24,10 @@ def audit_file() -> Path:
     return vault_dir() / "audit.jsonl"
 
 
+def error_file() -> Path:
+    return vault_dir() / "error.log"
+
+
 def server_name() -> str:
     """Nom du canal local : propre à l'utilisateur Windows courant."""
     return f"vault-{getpass.getuser()}"

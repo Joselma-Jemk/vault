@@ -12,20 +12,34 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from vault import audit
 from vault.store import VaultError, VaultStore, validate_name
 
-# Décide si une action est autorisée. Reçoit un résumé lisible, renvoie True pour autoriser.
-ApproveFn = Callable[[str], bool]
+# Réponses possibles de l'approbation.
+DENY = "refuse"
+ONCE = "une_fois"
+SESSION = "temporaire"
+
+TEMP_GRANT_SECONDS = 600  # « autoriser 10 min » : la même commande ne redemande pas pendant ce temps
+MAX_CONSECUTIVE_REFUSALS = 5  # après 5 refus d'affilée, les demandes sont refusées sans être affichées
+REFUSAL_COOLDOWN_SECONDS = 120
+
+# Reçoit un résumé lisible, renvoie DENY, ONCE ou SESSION (True est accepté comme ONCE).
+ApproveFn = Callable[[str], Any]
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 RUN_TIMEOUT_SECONDS = 300
+# Une commande trop longue peut cacher une partie de ce que l'utilisateur approuve : elle est refusée.
+MAX_COMMAND_LENGTH = 1500
 MASK = "***"
+REFUSED_MESSAGE = "Refusé par l'utilisateur"
 
 
 class Broker:
@@ -34,10 +48,15 @@ class Broker:
         store: VaultStore,
         approve: ApproveFn,
         audit_path: Path,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
         self._approve = approve
         self._audit_path = audit_path
+        self._clock = clock
+        self._grants: dict[tuple[str, str, str], float] = {}
+        self._refusals = 0
+        self._cooldown_until = 0.0
 
     # --- point d'entrée --------------------------------------------------------
 
@@ -67,26 +86,20 @@ class Broker:
             raise VaultError("La commande gh est introuvable (GitHub CLI)")
 
         summary = f"Poser le secret GitHub « {name} » sur le dépôt {repo}"
-        if not self._decide(summary, action="gh_secret", name=name, target=repo):
-            return _error("Refusé par l'utilisateur")
+        label = self._decide(summary, action="gh_secret", name=name, target=repo)
+        if label is None:
+            return _error(REFUSED_MESSAGE)
 
-        completed = subprocess.run(
+        return self._execute(
             [gh, "secret", "set", name, "--repo", repo],
-            input=value,
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
+            env=None,
+            stdin=value,
+            value=value,
+            action="gh_secret",
+            name=name,
+            target=repo,
+            label=label,
         )
-        self._store.mark_used(name)
-        result = "ok" if completed.returncode == 0 else f"code {completed.returncode}"
-        self._audit("gh_secret", name, repo, "approuvé", result)
-        return {
-            "ok": completed.returncode == 0,
-            "stdout": _mask(completed.stdout, value),
-            "stderr": _mask(completed.stderr, value),
-            "returncode": completed.returncode,
-        }
 
     def _run(self, request: dict[str, Any]) -> dict[str, Any]:
         name = validate_name(str(request.get("name", "")))
@@ -98,22 +111,69 @@ class Broker:
             raise VaultError("La commande doit être une liste d'arguments non vide")
         value = self._require_value(name)
 
-        command_line = " ".join(argv)
-        summary = f"Lancer « {command_line} » avec le secret « {name} » dans ${env_var}"
-        if not self._decide(summary, action="run", name=name, target=command_line):
-            return _error("Refusé par l'utilisateur")
-
-        env = {**_base_env(), env_var: value}
-        completed = subprocess.run(
-            argv,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
+        # Affichage avec les guillemets de Windows : deux commandes différentes ne s'affichent jamais pareil.
+        command_line = subprocess.list2cmdline(argv)
+        if len(command_line) > MAX_COMMAND_LENGTH:
+            raise VaultError(f"Commande trop longue (plus de {MAX_COMMAND_LENGTH} caractères)")
+        shown = _printable(command_line)
+        summary = f"Lancer « {shown} » avec le secret « {name} » dans ${env_var}"
+        # L'autorisation temporaire est liée à la liste exacte d'arguments, pas à son affichage.
+        label = self._decide(
+            summary, action="run", name=name, target=shown, grant_key=json.dumps(argv, ensure_ascii=True)
         )
+        if label is None:
+            return _error(REFUSED_MESSAGE)
+
+        return self._execute(
+            argv,
+            env={**_base_env(), env_var: value},
+            stdin=None,
+            value=value,
+            action="run",
+            name=name,
+            target=shown,
+            label=label,
+        )
+
+    # --- exécution ---------------------------------------------------------------
+
+    def _execute(
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str] | None,
+        stdin: str | None,
+        value: str,
+        action: str,
+        name: str,
+        target: str,
+        label: str,
+    ) -> dict[str, Any]:
+        """Lance la commande. Ne lève jamais : toute panne devient une réponse d'erreur pour la CLI."""
+        kwargs: dict[str, Any] = {
+            "input": stdin,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",  # une sortie dans une autre page de code ne doit pas faire planter
+            "timeout": RUN_TIMEOUT_SECONDS,
+            "check": False,
+        }
+        if env is not None:
+            kwargs["env"] = env
+        try:
+            completed = subprocess.run(argv, **kwargs)
+        except subprocess.TimeoutExpired:
+            self._store.mark_used(name)  # la valeur a bien été transmise à la commande
+            self._audit(action, name, target, label, "délai dépassé")
+            return _error(f"Délai dépassé ({RUN_TIMEOUT_SECONDS} s), commande arrêtée")
+        except OSError as exc:
+            self._audit(action, name, target, label, "lancement impossible")
+            return _error(f"Impossible de lancer la commande : {_mask(str(exc), value)}")
+
         self._store.mark_used(name)
-        self._audit("run", name, command_line, "approuvé", f"code {completed.returncode}")
+        result = "ok" if completed.returncode == 0 else f"code {completed.returncode}"
+        self._audit(action, name, target, label, result)
         return {
             "ok": completed.returncode == 0,
             "stdout": _mask(completed.stdout, value),
@@ -128,25 +188,70 @@ class Broker:
             raise VaultError(f"Entrée inconnue : {name}")
         return self._store.get_value(name)
 
-    def _decide(self, summary: str, *, action: str, name: str, target: str) -> bool:
-        approved = bool(self._approve(summary))
-        if not approved:
+    def _decide(
+        self, summary: str, *, action: str, name: str, target: str, grant_key: str | None = None
+    ) -> str | None:
+        """Renvoie l'étiquette du journal si l'action est autorisée, None si elle est refusée."""
+        now = self._clock()
+        key = (action, name, grant_key if grant_key is not None else target)
+        self._forget_expired_grants(now)
+
+        if key in self._grants:
+            return "approuvé (temporaire)"
+        if now < self._cooldown_until:
+            self._audit(action, name, target, "refusé (trop de refus récents)", "-")
+            return None
+
+        answer = _normalize(self._approve(summary))
+        if answer == DENY:
             self._audit(action, name, target, "refusé", "-")
-        return approved
+            self._refusals += 1
+            if self._refusals >= MAX_CONSECUTIVE_REFUSALS:
+                self._cooldown_until = now + REFUSAL_COOLDOWN_SECONDS
+                self._refusals = 0
+            return None
+
+        self._refusals = 0
+        if answer == SESSION:
+            self._grants[key] = now + TEMP_GRANT_SECONDS
+            return "approuvé (temporaire)"
+        return "approuvé"
+
+    def _forget_expired_grants(self, now: float) -> None:
+        for key, expires in list(self._grants.items()):
+            if expires <= now:
+                del self._grants[key]
 
     def _audit(self, action: str, name: str, target: str, decision: str, result: str) -> None:
         """Journal sans jamais écrire la valeur du secret."""
-        entry = {
-            "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "action": action,
-            "name": name,
-            "target": target,
-            "decision": decision,
-            "result": result,
-        }
-        self._audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._audit_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        audit.append(
+            self._audit_path,
+            {
+                "ts": _utc_now(),
+                "action": action,
+                "name": name,
+                "target": target,
+                "decision": decision,
+                "result": result,
+            },
+        )
+
+
+def _normalize(answer: Any) -> str:
+    if answer is True:
+        return ONCE
+    if answer in (ONCE, SESSION):
+        return answer
+    return DENY
+
+
+def _printable(text: str) -> str:
+    """Rend visibles les caractères de contrôle (retours à la ligne, etc.) au lieu de les interpréter."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _error(message: str) -> dict[str, Any]:

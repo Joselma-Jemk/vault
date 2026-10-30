@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
+from datetime import datetime, timezone
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication, QObject
+from PySide6.QtCore import QCoreApplication, QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from vault.broker import Broker
-from vault.paths import server_name
+from vault.paths import error_file, server_name
 
 MAX_MESSAGE_BYTES = 64 * 1024
 CLIENT_CONNECT_MS = 3_000
@@ -26,6 +28,9 @@ class ServerUnavailable(Exception):
 
 
 class BrokerServer(QObject):
+    # Émis après chaque demande traitée : une commande longue ne doit pas passer pour une mise en veille.
+    handled = Signal()
+
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._broker: Broker | None = None
@@ -61,6 +66,7 @@ class BrokerServer(QObject):
         socket.flush()
         socket.waitForBytesWritten(3_000)
         socket.disconnectFromServer()
+        self.handled.emit()
 
     def _respond(self, raw: bytes) -> dict[str, Any]:
         if self._broker is None:
@@ -73,7 +79,23 @@ class BrokerServer(QObject):
             return {"ok": False, "error": "Requête illisible"}
         if not isinstance(request, dict):
             return {"ok": False, "error": "Requête invalide"}
-        return self._broker.handle(request)
+        try:
+            return self._broker.handle(request)
+        except Exception:  # noqa: BLE001 - la CLI doit toujours recevoir une réponse, jamais attendre
+            _log_error()
+            return {"ok": False, "error": "Erreur interne du coffre (détails dans error.log)"}
+
+
+def _log_error() -> None:
+    """Note l'exception en cours dans error.log (une application sans console n'affiche rien)."""
+    path = error_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"--- {stamp}\n{traceback.format_exc()}\n")
+    except OSError:
+        pass  # impossible d'écrire le journal : on ne masque pas l'erreur d'origine pour autant
 
 
 def send_request(request: dict[str, Any]) -> dict[str, Any]:

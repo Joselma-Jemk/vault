@@ -11,7 +11,7 @@ from vault import broker as broker_module
 from vault.broker import Broker
 from vault.store import VaultStore
 
-SECRET = "ghp_SECRET_VALUE_12345"
+SECRET = "tok_SECRET_VALUE_12345"
 
 
 @pytest.fixture
