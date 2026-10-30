@@ -32,6 +32,8 @@ jobs:
           --include-package=vault
           --assume-yes-for-downloads
           --product-name=Vault
+          --product-version=0.1.0
+          --file-version=0.1.0
           --file-description="Local secrets vault"
           --output-dir=dist
           --output-filename=vault-gui.exe
