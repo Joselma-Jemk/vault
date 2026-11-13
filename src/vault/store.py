@@ -56,13 +56,45 @@ def validate_password(password: str) -> str:
     return password
 
 
+@dataclass
+class Project:
+    """Dossier enregistré par l'utilisateur, avec les seules entrées qu'il a le droit d'utiliser."""
+
+    entries: list[str]
+    created: str
+    updated: str
+
+
+def normalize_dir(path: str) -> str:
+    """Chemin absolu normalisé, en minuscules sous Windows : sert de clé stable pour un projet."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _ancestors(path: str):
+    """Dossiers parents, du plus proche au plus lointain."""
+    current = path
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return
+        yield parent
+        current = parent
+
+
 class VaultStore:
     """Coffre déverrouillé. Les valeurs ne vivent qu'en mémoire, jamais sur le disque en clair."""
 
-    def __init__(self, path: Path, password: str, entries: dict[str, Entry]) -> None:
+    def __init__(
+        self,
+        path: Path,
+        password: str,
+        entries: dict[str, Entry],
+        projects: dict[str, Project] | None = None,
+    ) -> None:
         self._path = path
         self._password = password
         self._entries = entries
+        self._projects = projects or {}
 
     # --- ouverture et création -------------------------------------------------
 
@@ -81,9 +113,10 @@ class VaultStore:
         try:
             raw = json.loads(plaintext.decode("utf-8"))
             entries = {name: Entry(**data) for name, data in raw["entries"].items()}
+            projects = {path_: Project(**data) for path_, data in raw.get("projects", {}).items()}
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise VaultError("Contenu du coffre illisible") from exc
-        return cls(path, password, entries)
+        return cls(path, password, entries, projects)
 
     @classmethod
     def exists(cls, path: Path) -> bool:
@@ -112,6 +145,65 @@ class VaultStore:
 
     def __contains__(self, name: object) -> bool:
         return name in self._entries
+
+    # --- projets ---------------------------------------------------------------
+
+    def list_projects(self) -> list[dict[str, object]]:
+        """Projets enregistrés : dossier, entrées autorisées et dates. Jamais de valeurs."""
+        return [
+            {
+                "path": path,
+                "entries": list(project.entries),
+                "effective": sorted(self.effective_entries(path)),
+                "created": project.created,
+                "updated": project.updated,
+            }
+            for path, project in sorted(self._projects.items())
+        ]
+
+    def resolve_project(self, directory: str) -> str:
+        """Projet enregistré pour ce dossier : lui-même, ou le plus proche parent enregistré."""
+        current = normalize_dir(directory)
+        if current in self._projects:
+            return current
+        for parent in _ancestors(current):
+            if parent in self._projects:
+                return parent
+        raise VaultError("Aucun projet enregistré pour ce dossier : demande à l'utilisateur de l'ajouter dans Vault")
+
+    def effective_entries(self, project_path: str) -> set[str]:
+        """Entrées réellement utilisables dans ce projet.
+
+        Un sous-projet n'hérite jamais de plus que son parent : ses entrées sont intersectées avec celles du parent.
+        """
+        own = set(self._projects[project_path].entries)
+        for parent in _ancestors(project_path):
+            if parent in self._projects:
+                return own & self.effective_entries(parent)
+        return own
+
+    def set_project(self, directory: str, entries: list[str]) -> None:
+        """Enregistre ou met à jour un projet. Seules les entrées existantes peuvent être autorisées."""
+        path = normalize_dir(directory)
+        if not os.path.isdir(path):
+            raise VaultError(f"Dossier introuvable : {directory}")
+        unknown = [name for name in entries if name not in self._entries]
+        if unknown:
+            raise VaultError(f"Entrée inconnue : {', '.join(unknown)}")
+        for name in entries:
+            validate_name(name)
+        now = now_iso()
+        previous = self._projects.get(path)
+        created = previous.created if previous else now
+        self._projects[path] = Project(entries=sorted(set(entries)), created=created, updated=now)
+        self.save()
+
+    def delete_project(self, directory: str) -> None:
+        path = normalize_dir(directory)
+        if path not in self._projects:
+            raise VaultError(f"Projet inconnu : {directory}")
+        del self._projects[path]
+        self.save()
 
     # --- écriture --------------------------------------------------------------
 
@@ -150,7 +242,10 @@ class VaultStore:
             raise
 
     def save(self) -> None:
-        raw = {"entries": {name: vars(entry) for name, entry in self._entries.items()}}
+        raw = {
+            "entries": {name: vars(entry) for name, entry in self._entries.items()},
+            "projects": {path: vars(project) for path, project in self._projects.items()},
+        }
         plaintext = json.dumps(raw, ensure_ascii=False).encode("utf-8")
         blob = crypto.encrypt(plaintext, self._password)
         self._path.parent.mkdir(parents=True, exist_ok=True)

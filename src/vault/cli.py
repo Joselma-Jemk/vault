@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from collections.abc import Sequence
 
@@ -24,7 +26,40 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("name", help="Nom de l'entrée dans le coffre")
     run.add_argument("env_var", help="Variable d'environnement qui recevra la valeur")
     run.add_argument("argv", nargs=argparse.REMAINDER, help="Commande à lancer, après --")
+
+    ex = sub.add_parser(
+        "exec",
+        help="Lance une commande avec tous les secrets référencés dans un fichier (KEY=vault:NOM)",
+    )
+    ex.add_argument("--env", default=DEFAULT_ENV_FILE, help=f"Fichier de références (défaut : {DEFAULT_ENV_FILE})")
+    ex.add_argument("argv", nargs=argparse.REMAINDER, help="Commande à lancer, après --")
     return parser
+
+
+DEFAULT_ENV_FILE = ".env.vault"
+REFERENCE_LINE = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*vault:([A-Za-z_][A-Za-z0-9_]{0,63})\s*(?:#.*)?$"
+)
+COMMENT_LINE = re.compile(r"^\s*(?:#.*)?$")
+
+
+def parse_references(text: str) -> dict[str, str]:
+    """Lit un fichier de références `VARIABLE=vault:NOM`. Refuse toute valeur en clair."""
+    mapping: dict[str, str] = {}
+    for number, line in enumerate(text.splitlines(), start=1):
+        if COMMENT_LINE.match(line):
+            continue
+        match = REFERENCE_LINE.match(line)
+        if match is None:
+            raise ValueError(
+                f"ligne {number} : seules les références « VARIABLE=vault:NOM » sont acceptées, "
+                "jamais une valeur en clair"
+            )
+        var, name = match.groups()
+        if var in mapping:
+            raise ValueError(f"ligne {number} : la variable {var} est déjà définie")
+        mapping[var] = name
+    return mapping
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -39,6 +74,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _list()
         if args.subcommand == "gh-secret":
             return _gh_secret(args.name, args.repo)
+        if args.subcommand == "exec":
+            return _exec(args.env, args.argv)
         return _run(args.name, args.env_var, args.argv)
     except ServerUnavailable as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
@@ -79,6 +116,29 @@ def _run(name: str, env_var: str, command: list[str]) -> int:
     reply = _request({"action": "run", "name": name, "env_var": env_var, "argv": command})
     code = _emit(reply)
     return code
+
+
+def _exec(env_file: str, command: list[str]) -> int:
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        print("Erreur : indique la commande après --", file=sys.stderr)
+        return 1
+    try:
+        with open(env_file, encoding="utf-8") as handle:
+            mapping = parse_references(handle.read())
+    except OSError as exc:
+        print(f"Erreur : fichier de références illisible ({exc})", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Erreur : {env_file} : {exc}", file=sys.stderr)
+        return 1
+    if not mapping:
+        print(f"Erreur : {env_file} ne contient aucune référence", file=sys.stderr)
+        return 1
+    # Seuls les noms partent vers l'application : aucune valeur ne passe par la CLI.
+    reply = _request({"action": "exec", "project": os.getcwd(), "mapping": mapping, "argv": command})
+    return _emit(reply)
 
 
 def _emit(reply: dict) -> int:

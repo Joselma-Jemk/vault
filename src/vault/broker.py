@@ -38,6 +38,7 @@ ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 RUN_TIMEOUT_SECONDS = 300
 # Une commande trop longue peut cacher une partie de ce que l'utilisateur approuve : elle est refusée.
 MAX_COMMAND_LENGTH = 1500
+MAX_MAPPINGS = 64
 MASK = "***"
 REFUSED_MESSAGE = "Refusé par l'utilisateur"
 
@@ -69,6 +70,8 @@ class Broker:
                 return self._gh_secret(request)
             if action == "run":
                 return self._run(request)
+            if action == "exec":
+                return self._exec(request)
             return _error(f"Action inconnue : {action}")
         except VaultError as exc:
             return _error(str(exc))
@@ -94,9 +97,9 @@ class Broker:
             [gh, "secret", "set", name, "--repo", repo],
             env=None,
             stdin=value,
-            value=value,
+            values=[value],
             action="gh_secret",
-            name=name,
+            names=[name],
             target=repo,
             label=label,
         )
@@ -106,9 +109,7 @@ class Broker:
         env_var = str(request.get("env_var", ""))
         if not ENV_NAME_PATTERN.match(env_var):
             raise VaultError("Nom de variable d'environnement invalide")
-        argv = request.get("argv")
-        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
-            raise VaultError("La commande doit être une liste d'arguments non vide")
+        argv = _checked_argv(request.get("argv"))
         value = self._require_value(name)
 
         # Affichage avec les guillemets de Windows : deux commandes différentes ne s'affichent jamais pareil.
@@ -128,9 +129,55 @@ class Broker:
             argv,
             env={**_base_env(), env_var: value},
             stdin=None,
-            value=value,
+            values=[value],
             action="run",
-            name=name,
+            names=[name],
+            target=shown,
+            label=label,
+        )
+
+    def _exec(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Lance une commande avec plusieurs secrets, résolus depuis un projet enregistré. Une seule approbation."""
+        directory = request.get("project")
+        if not isinstance(directory, str) or not directory:
+            raise VaultError("Dossier du projet manquant")
+        mapping = _checked_mapping(request.get("mapping"))
+        argv = _checked_argv(request.get("argv"))
+
+        # Le projet est celui du dossier courant, ou du plus proche parent enregistré.
+        project = self._store.resolve_project(directory)
+        allowed = self._store.effective_entries(project)
+        for name in mapping.values():
+            if name not in allowed:
+                raise VaultError(f"« {name} » n'est pas autorisée pour le projet {project}")
+            self._require_value(name)
+
+        command_line = subprocess.list2cmdline(argv)
+        if len(command_line) > MAX_COMMAND_LENGTH:
+            raise VaultError(f"Commande trop longue (plus de {MAX_COMMAND_LENGTH} caractères)")
+        shown = _printable(command_line)
+        bindings = ", ".join(f"{var} ← {name}" for var, name in sorted(mapping.items()))
+        summary = f"Projet « {_printable(project)} »\nLancer « {shown} »\nSecrets : {bindings}"
+        names = sorted(set(mapping.values()))
+        grant_key = json.dumps({"p": project, "m": sorted(mapping.items()), "a": argv}, ensure_ascii=True)
+        label = self._decide(
+            summary,
+            action="exec",
+            name=",".join(names),
+            target=shown,
+            grant_key=grant_key,
+        )
+        if label is None:
+            return _error(REFUSED_MESSAGE)
+
+        values = {var: self._store.get_value(name) for var, name in mapping.items()}
+        return self._execute(
+            argv,
+            env={**_base_env(), **values},
+            stdin=None,
+            values=list(values.values()),
+            action="exec",
+            names=names,
             target=shown,
             label=label,
         )
@@ -143,9 +190,9 @@ class Broker:
         *,
         env: dict[str, str] | None,
         stdin: str | None,
-        value: str,
+        values: list[str],
         action: str,
-        name: str,
+        names: list[str],
         target: str,
         label: str,
     ) -> dict[str, Any]:
@@ -164,24 +211,28 @@ class Broker:
         try:
             completed = subprocess.run(argv, **kwargs)
         except subprocess.TimeoutExpired:
-            self._store.mark_used(name)  # la valeur a bien été transmise à la commande
-            self._audit(action, name, target, label, "délai dépassé")
+            self._mark_used(names)  # les valeurs ont bien été transmises à la commande
+            self._audit(action, ",".join(names), target, label, "délai dépassé")
             return _error(f"Délai dépassé ({RUN_TIMEOUT_SECONDS} s), commande arrêtée")
         except OSError as exc:
-            self._audit(action, name, target, label, "lancement impossible")
-            return _error(f"Impossible de lancer la commande : {_mask(str(exc), value)}")
+            self._audit(action, ",".join(names), target, label, "lancement impossible")
+            return _error(f"Impossible de lancer la commande : {_mask_all(str(exc), values)}")
 
-        self._store.mark_used(name)
+        self._mark_used(names)
         result = "ok" if completed.returncode == 0 else f"code {completed.returncode}"
-        self._audit(action, name, target, label, result)
+        self._audit(action, ",".join(names), target, label, result)
         return {
             "ok": completed.returncode == 0,
-            "stdout": _mask(completed.stdout, value),
-            "stderr": _mask(completed.stderr, value),
+            "stdout": _mask_all(completed.stdout, values),
+            "stderr": _mask_all(completed.stderr, values),
             "returncode": completed.returncode,
         }
 
     # --- outils internes -------------------------------------------------------
+
+    def _mark_used(self, names: list[str]) -> None:
+        for name in names:
+            self._store.mark_used(name)
 
     def _require_value(self, name: str) -> str:
         if name not in self._store:
@@ -237,6 +288,27 @@ class Broker:
         )
 
 
+def _checked_argv(argv: Any) -> list[str]:
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        raise VaultError("La commande doit être une liste d'arguments non vide")
+    return argv
+
+
+def _checked_mapping(mapping: Any) -> dict[str, str]:
+    if not isinstance(mapping, dict) or not mapping:
+        raise VaultError("Aucune référence de secret à résoudre")
+    if len(mapping) > MAX_MAPPINGS:
+        raise VaultError(f"Trop de références (plus de {MAX_MAPPINGS})")
+    checked: dict[str, str] = {}
+    for var, name in mapping.items():
+        if not isinstance(var, str) or not ENV_NAME_PATTERN.match(var):
+            raise VaultError(f"Nom de variable d'environnement invalide : {var!r}")
+        if not isinstance(name, str):
+            raise VaultError(f"Nom d'entrée invalide pour {var}")
+        checked[var] = validate_name(name)
+    return checked
+
+
 def _normalize(answer: Any) -> str:
     if answer is True:
         return ONCE
@@ -263,10 +335,11 @@ def _base_env() -> dict[str, str]:
     return dict(os.environ)
 
 
-def _mask(text: str | None, secret: str) -> str:
-    """Remplace la valeur (brute et en base64) par MASK dans une sortie."""
+def _mask_all(text: str | None, secrets: list[str]) -> str:
+    """Remplace chaque valeur (brute et en base64) par MASK dans une sortie."""
     if not text:
         return ""
-    for needle in {secret, base64.b64encode(secret.encode("utf-8")).decode("ascii")}:
-        text = text.replace(needle, MASK)
+    for secret in secrets:
+        for needle in {secret, base64.b64encode(secret.encode("utf-8")).decode("ascii")}:
+            text = text.replace(needle, MASK)
     return text
