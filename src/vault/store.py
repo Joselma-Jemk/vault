@@ -124,17 +124,22 @@ class VaultStore:
 
     # --- lecture ---------------------------------------------------------------
 
-    def list_metadata(self) -> list[dict[str, str | None]]:
-        """Noms et dates, jamais les valeurs."""
+    def list_metadata(self) -> list[dict[str, str | bool | None]]:
+        """Noms, dates et état (en attente ou non), jamais les valeurs."""
         return [
             {
                 "name": name,
                 "created": entry.created,
                 "updated": entry.updated,
                 "last_used": entry.last_used,
+                "pending": entry.value == "",
             }
             for name, entry in sorted(self._entries.items())
         ]
+
+    def is_pending(self, name: str) -> bool:
+        """Entrée déclarée mais pas encore renseignée : son nom existe, sa valeur non."""
+        return name in self._entries and self._entries[name].value == ""
 
     def get_value(self, name: str) -> str:
         """Valeur d'une entrée. Réservé au courtier et à la copie dans l'interface, jamais à la CLI."""
@@ -216,6 +221,20 @@ class VaultStore:
         last_used = previous.last_used if previous else None
         self._entries[name] = Entry(value=value, created=created, updated=now, last_used=last_used)
         self.save()
+
+    def declare(self, name: str) -> bool:
+        """Crée une entrée en attente, sans valeur. Renvoie False si l'entrée existe déjà.
+
+        Une entrée en attente ne contient aucun secret : Claude peut la déclarer pour que le code la référence,
+        et l'utilisateur renseigne ensuite la valeur dans Vault.
+        """
+        validate_name(name)
+        if name in self._entries:
+            return False
+        now = now_iso()
+        self._entries[name] = Entry(value="", created=now, updated=now)
+        self.save()
+        return True
 
     def delete(self, name: str) -> None:
         if name not in self._entries:

@@ -1,5 +1,11 @@
 # Changelog
 
+## Non publié
+
+- `vault declare NOM…` : crée des entrées **en attente**, sans valeur. Claude peut déclarer les clés qui manquent sans
+  jamais voir de secret ; l'utilisateur renseigne la valeur dans l'interface. Les entrées en attente sont marquées dans
+  `vault list` et dans l'interface, et `vault exec` / `vault run` les refusent.
+
 ## 0.1.2
 
 - Build: the executables are now compiled as folders (Nuitka standalone) instead of single files. The single-file

@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("list", help="Liste les noms et les dates (jamais les valeurs)")
     sub.add_parser("gui", help="Ouvre l'interface graphique du coffre")
 
+    decl = sub.add_parser(
+        "declare",
+        help="Crée une entrée en attente, sans valeur : l'utilisateur la renseigne ensuite dans Vault",
+    )
+    decl.add_argument("names", nargs="+", help="Noms des entrées à déclarer")
+
     gh = sub.add_parser("gh-secret", help="Pose un secret GitHub Actions avec une valeur du coffre")
     gh.add_argument("name", help="Nom de l'entrée dans le coffre")
     gh.add_argument("--repo", required=True, help="Dépôt cible, au format proprietaire/depot")
@@ -72,6 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return gui_main()
         if args.subcommand == "list":
             return _list()
+        if args.subcommand == "declare":
+            return _declare(args.names)
         if args.subcommand == "gh-secret":
             return _gh_secret(args.name, args.repo)
         if args.subcommand == "exec":
@@ -96,9 +104,20 @@ def _list() -> int:
         return 0
     print(f"{'NOM':<32} {'CRÉÉ':<22} {'MODIFIÉ':<22} DERNIER USAGE")
     for row in rows:
-        print(
-            f"{row['name']:<32} {row['created']:<22} {row['updated']:<22} {row['last_used'] or '-'}"
-        )
+        usage = "à renseigner" if row.get("pending") else (row["last_used"] or "-")
+        print(f"{row['name']:<32} {row['created']:<22} {row['updated']:<22} {usage}")
+    return 0
+
+
+def _declare(names: list[str]) -> int:
+    reply = _request({"action": "declare", "names": names})
+    if not reply.get("ok"):
+        return _fail(reply)
+    data = reply["data"]
+    for name in data["created"]:
+        print(f"Créée en attente : {name} (à renseigner dans Vault)")
+    for name in data["existing"]:
+        print(f"Déjà présente : {name}")
     return 0
 
 

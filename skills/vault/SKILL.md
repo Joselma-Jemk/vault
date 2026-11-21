@@ -67,6 +67,20 @@ Lister les noms et les dates (jamais les valeurs) :
 vault list
 ```
 
+Déclarer une clé qui manque encore, pour que le code la référence :
+
+```bash
+vault declare OPENAI_KEY STRIPE_KEY
+```
+
+Une entrée déclarée est **en attente** : son nom existe, sa valeur non. Elle ne contient aucun secret, donc tu peux la
+déclarer sans demander. Ensuite :
+
+- Écris le code ou le fichier de références avec `OPENAI_API_KEY=vault:OPENAI_KEY`, comme pour une clé existante.
+- Dis à l'utilisateur de renseigner la valeur dans Vault (« Modifier la valeur ») et de l'ajouter au projet.
+- Tant qu'elle est en attente, `vault exec` et `vault run` refusent de la lancer et te l'indiquent. Ne contourne pas ce
+  refus, et ne mets jamais de valeur à la place.
+
 Poser un secret GitHub Actions sur un dépôt, à partir d'une entrée du coffre :
 
 ```bash

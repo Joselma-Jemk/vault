@@ -72,11 +72,34 @@ class Broker:
                 return self._run(request)
             if action == "exec":
                 return self._exec(request)
+            if action == "declare":
+                return self._declare(request)
             return _error(f"Action inconnue : {action}")
         except VaultError as exc:
             return _error(str(exc))
 
     # --- actions ---------------------------------------------------------------
+
+    def _declare(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Crée des entrées en attente (sans valeur). Aucun secret, donc aucune approbation demandée.
+
+        Le droit d'utiliser l'entrée dans un projet reste à l'utilisateur, dans l'interface.
+        """
+        names = request.get("names")
+        if not isinstance(names, list) or not names or len(names) > MAX_MAPPINGS:
+            raise VaultError(f"Indique entre 1 et {MAX_MAPPINGS} noms")
+        names = [validate_name(str(name)) for name in names]
+        created: list[str] = []
+        existing: list[str] = []
+        for name in names:
+            if self._store.declare(name):
+                created.append(name)
+                result = "créée en attente"
+            else:
+                existing.append(name)
+                result = "existe déjà"
+            self._audit("declare", name, "coffre", "auto", result)
+        return {"ok": True, "data": {"created": created, "existing": existing}}
 
     def _gh_secret(self, request: dict[str, Any]) -> dict[str, Any]:
         name = validate_name(str(request.get("name", "")))
@@ -237,6 +260,8 @@ class Broker:
     def _require_value(self, name: str) -> str:
         if name not in self._store:
             raise VaultError(f"Entrée inconnue : {name}")
+        if self._store.is_pending(name):
+            raise VaultError(f"« {name} » est en attente : sa valeur reste à renseigner dans Vault")
         return self._store.get_value(name)
 
     def _decide(

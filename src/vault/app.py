@@ -8,7 +8,7 @@ from importlib import resources
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -352,10 +352,14 @@ class MainWindow(QMainWindow):
         rows = self._store.list_metadata()
         self._table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            values = [row["name"], row["created"], row["updated"], row["last_used"] or "-"]
+            pending = bool(row.get("pending"))
+            usage = "à renseigner" if pending else (row["last_used"] or "-")
+            values = [row["name"], row["created"], row["updated"], usage]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if pending:
+                    item.setForeground(QColor("#c77700"))
                 self._table.setItem(r, c, item)
         self._apply_filter(self._search.text())
 
@@ -398,6 +402,9 @@ class MainWindow(QMainWindow):
         name = self._selected_name()
         if name is None:
             self.statusBar().showMessage("Sélectionne une entrée à copier.")
+            return
+        if self._store.is_pending(name):
+            self.statusBar().showMessage(f"« {name} » est en attente : renseigne sa valeur d'abord (Modifier la valeur).")
             return
         value = self._store.get_value(name)
         QApplication.clipboard().setText(value)
