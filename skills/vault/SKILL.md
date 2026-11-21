@@ -73,6 +73,10 @@ Déclarer une clé qui manque encore, pour que le code la référence :
 vault declare OPENAI_KEY STRIPE_KEY
 ```
 
+L'utilisateur peut activer un **mode confiance** d'une heure dans l'interface : `vault exec` tourne alors dans les projets
+enregistrés sans demande. Tu ne peux pas l'activer, et il ne couvre ni `vault run`, ni les entrées hors projet. Ne te
+base jamais sur ce mode pour contourner une demande : si une commande est refusée, dis-le à l'utilisateur.
+
 Une entrée déclarée est **en attente** : son nom existe, sa valeur non. Elle ne contient aucun secret, donc tu peux la
 déclarer sans demander. Ensuite :
 

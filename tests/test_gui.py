@@ -90,3 +90,19 @@ def test_session_lock_message_is_detected() -> None:
 
     msg.wParam = 0x8  # session déverrouillée : ne doit pas verrouiller
     assert not session.is_session_lock_message(ctypes.addressof(msg))
+
+
+def test_double_click_opens_value_edit(window: MainWindow, monkeypatch) -> None:
+    called: list[bool] = []
+    monkeypatch.setattr(window, "_edit", lambda: called.append(True))
+    monkeypatch.setattr(window, "_copy", lambda: called.append(False))
+    index = window._table.model().index(0, 0)
+    window._table.doubleClicked.emit(index)
+    assert called == [True]
+
+
+def test_themed_icons_are_loaded_from_pyplayer_set(qapp: QApplication) -> None:
+    from vault.app import themed_icon
+
+    for name in ("add", "metadata", "remove"):
+        assert not themed_icon(name).isNull()

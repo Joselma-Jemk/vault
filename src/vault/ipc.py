@@ -51,6 +51,10 @@ class BrokerServer(QObject):
         self._broker = None
         self._server.close()
 
+    @property
+    def broker(self) -> Broker | None:
+        return self._broker
+
     def set_broker(self, broker: Broker | None) -> None:
         """Branché au déverrouillage, débranché au verrouillage."""
         self._broker = broker

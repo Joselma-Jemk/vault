@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from vault import audit, autostart
-from vault.broker import DENY, ONCE, SESSION, TEMP_GRANT_SECONDS, Broker
+from vault.broker import DENY, ONCE, SESSION, TEMP_GRANT_SECONDS, TRUST_SECONDS, Broker
 from vault.crypto import WrongPassword
 from vault.ipc import BrokerServer
 from vault.paths import audit_file, vault_file
@@ -79,6 +79,25 @@ def _logo_bytes() -> bytes | None:
 
 
 # --- dialogues ---------------------------------------------------------------
+
+
+ICONS_FOLDER = "assets", "icons"
+
+
+def _is_dark_scheme() -> bool:
+    app = QApplication.instance()
+    return app is not None and app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+
+def themed_icon(name: str) -> QIcon:
+    """Icône PyPlayer adaptée au thème : blanche sur fond sombre, sombre sur fond clair. Vide si introuvable."""
+    folder = "light" if _is_dark_scheme() else "dark"
+    try:
+        data = resources.files("vault").joinpath(*ICONS_FOLDER).joinpath(folder).joinpath(f"{name}.png").read_bytes()
+    except (OSError, ModuleNotFoundError, TypeError):
+        return QIcon()
+    pixmap = QPixmap()
+    return QIcon(pixmap) if pixmap.loadFromData(data) else QIcon()
 
 
 def ask_approval(parent: QWidget | None, summary: str) -> str:
@@ -268,7 +287,7 @@ class MainWindow(QMainWindow):
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self._table.doubleClicked.connect(lambda _index: self._copy())
+        self._table.doubleClicked.connect(lambda _index: self._edit())
 
         add = QPushButton("Ajouter")
         edit = QPushButton("Modifier la valeur")
@@ -280,6 +299,11 @@ class MainWindow(QMainWindow):
         copy.clicked.connect(self._copy)
         delete.clicked.connect(self._delete)
         lock.clicked.connect(self.lock)
+        # Icônes du jeu PyPlayer, adaptées au thème. Copier et Verrouiller n'ont pas d'équivalent : texte seul.
+        self._themed_buttons = [(add, "add"), (edit, "metadata"), (delete, "remove")]
+        self._refresh_icons()
+        style_hints = QApplication.styleHints()
+        style_hints.colorSchemeChanged.connect(lambda _scheme: self._refresh_icons())
 
         buttons = QHBoxLayout()
         for button in (add, edit, copy, delete):
@@ -305,6 +329,14 @@ class MainWindow(QMainWindow):
         tools = self.menuBar().addMenu("Outils")
         tools.addAction(_action(self, "Changer le mot de passe maître…", self._change_password))
         tools.addAction(_action(self, "Journal des demandes…", self._show_audit))
+        tools.addSeparator()
+        self._trust = QAction("Mode confiance : 1 h sans demande pour les projets", self)
+        self._trust.setCheckable(True)
+        self._trust.toggled.connect(self._toggle_trust)
+        tools.addAction(self._trust)
+        self._trust_timer = QTimer(self)
+        self._trust_timer.setSingleShot(True)
+        self._trust_timer.timeout.connect(self._trust_expired)
         tools.addSeparator()
         if sys.platform == "win32":
             self._autostart = QAction("Lancer au démarrage de Windows", self)
@@ -461,8 +493,47 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Vault", f"Impossible de modifier le démarrage : {exc}")
             self._autostart.setChecked(not checked)
 
+    def _refresh_icons(self) -> None:
+        for button, name in self._themed_buttons:
+            button.setIcon(themed_icon(name))
+
+    def _set_trust_checked(self, checked: bool) -> None:
+        self._trust.blockSignals(True)
+        self._trust.setChecked(checked)
+        self._trust.blockSignals(False)
+
+    def _toggle_trust(self, checked: bool) -> None:
+        broker = self._server.broker
+        if not checked:
+            if broker is not None:
+                broker.disable_trust()
+            self._trust_timer.stop()
+            self.statusBar().showMessage("Mode confiance désactivé.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Vault : mode confiance",
+            "Pendant 1 heure, Claude pourra lancer « vault exec » dans les projets enregistrés sans te demander.\n\n"
+            "Restent soumis à approbation : les entrées hors projet, « vault run » et la copie.\n"
+            "Le mode s'arrête à la fin de l'heure ou au verrouillage.\n\nActiver ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes or broker is None:
+            self._set_trust_checked(False)
+            return
+        broker.enable_trust(TRUST_SECONDS)
+        self._trust_timer.start(TRUST_SECONDS * 1000)
+        self.statusBar().showMessage("Mode confiance actif pendant 1 h (vault exec dans les projets).")
+
+    def _trust_expired(self) -> None:
+        self._set_trust_checked(False)
+        self.statusBar().showMessage("Mode confiance terminé : les demandes redeviennent soumises à approbation.")
+
     def lock(self) -> None:
         """Verrouille : débranche le courtier, efface le presse-papiers, demande le mot de passe."""
+        self._trust_timer.stop()
+        self._set_trust_checked(False)
         self._server.set_broker(None)
         self._clear_clipboard()
         self.hide()

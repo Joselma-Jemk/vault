@@ -1,5 +1,13 @@
 # Changelog
 
+## Non publié
+
+- Interface : un double-clic sur une entrée ouvre la modification de la valeur (avant, il copiait).
+- Interface : icônes du jeu PyPlayer sur Ajouter, Modifier et Supprimer, blanches sur fond sombre et sombres sur fond
+  clair, qui suivent le thème Windows.
+- Mode confiance (Outils → Mode confiance) : pendant 1 h, `vault exec` tourne sans demande dans les projets enregistrés.
+  Désactivé par défaut, activé uniquement depuis l'interface, arrêté au verrouillage. `vault run` reste soumis à approbation.
+
 ## 0.2.0
 
 - Projects: register a folder in the app with the entries it may use. Sub-projects can only reduce their parent's

@@ -27,6 +27,8 @@ ONCE = "une_fois"
 SESSION = "temporaire"
 
 TEMP_GRANT_SECONDS = 600  # « autoriser 10 min » : la même commande ne redemande pas pendant ce temps
+TRUST_SECONDS = 3600  # mode confiance : 1 h, activé seulement depuis l'interface, jamais par Claude
+TRUST_LABEL = "confiance"
 MAX_CONSECUTIVE_REFUSALS = 5  # après 5 refus d'affilée, les demandes sont refusées sans être affichées
 REFUSAL_COOLDOWN_SECONDS = 120
 
@@ -56,6 +58,7 @@ class Broker:
         self._audit_path = audit_path
         self._clock = clock
         self._grants: dict[tuple[str, str, str], float] = {}
+        self._trust_until = 0.0
         self._refusals = 0
         self._cooldown_until = 0.0
 
@@ -272,6 +275,11 @@ class Broker:
         key = (action, name, grant_key if grant_key is not None else target)
         self._forget_expired_grants(now)
 
+        # Mode confiance : seulement pour `exec`, dont les entrées sont déjà limitées au projet enregistré.
+        # `run` et `gh-secret` restent toujours soumis à approbation.
+        if action == "exec" and now < self._trust_until:
+            return TRUST_LABEL
+
         if key in self._grants:
             return "approuvé (temporaire)"
         if now < self._cooldown_until:
@@ -292,6 +300,15 @@ class Broker:
             self._grants[key] = now + TEMP_GRANT_SECONDS
             return "approuvé (temporaire)"
         return "approuvé"
+
+    def enable_trust(self, seconds: float = TRUST_SECONDS) -> None:
+        self._trust_until = self._clock() + seconds
+
+    def disable_trust(self) -> None:
+        self._trust_until = 0.0
+
+    def trust_remaining(self) -> float:
+        return max(0.0, self._trust_until - self._clock())
 
     def _forget_expired_grants(self, now: float) -> None:
         for key, expires in list(self._grants.items()):
