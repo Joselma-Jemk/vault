@@ -1,6 +1,6 @@
 # Changelog
 
-## Non publié
+## 0.2.1
 
 - Interface : un double-clic sur une entrée ouvre la modification de la valeur (avant, il copiait).
 - Interface : icônes du jeu PyPlayer sur Ajouter, Modifier et Supprimer, blanches sur fond sombre et sombres sur fond
