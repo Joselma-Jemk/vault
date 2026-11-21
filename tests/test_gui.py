@@ -106,3 +106,42 @@ def test_themed_icons_are_loaded_from_pyplayer_set(qapp: QApplication) -> None:
 
     for name in ("add", "metadata", "remove"):
         assert not themed_icon(name).isNull()
+
+
+def test_copy_reference_puts_only_the_reference_on_clipboard(window: MainWindow, qapp: QApplication) -> None:
+    window._table.selectRow(0)
+    name = window._selected_name()
+    window._copy_reference()
+    assert QApplication.clipboard().text() == f"{name}=vault:{name}"
+    assert SECRET not in QApplication.clipboard().text()
+
+
+def test_recent_menu_lists_used_entries_without_values(window: MainWindow) -> None:
+    if not hasattr(window, "_recent_menu"):
+        pytest.skip("pas de zone de notification sur cette machine")
+    window._store.mark_used("GH_TOKEN")
+    window._fill_recent_menu()
+    labels = [action.text() for action in window._recent_menu.actions()]
+    assert "GH_TOKEN" in labels
+    assert all(SECRET not in label for label in labels)
+
+
+def test_tag_and_pending_filters_hide_rows(window: MainWindow) -> None:
+    window._store.set_tags("GH_TOKEN", ["github"])
+    window._store.declare("A_PENDING")
+    window._refresh()
+    window._tag_filter = "github"
+    window._apply_filter("")
+    assert _visible_names(window) == ["GH_TOKEN"]
+    window._tag_filter = ""
+    window._pending_only = True
+    window._apply_filter("")
+    assert _visible_names(window) == ["A_PENDING"]
+
+
+def test_expiry_reminder_shows_soon_expiring_entries(window: MainWindow) -> None:
+    from datetime import date, timedelta
+
+    window._store.set_expiry("GH_TOKEN", (date.today() + timedelta(days=2)).isoformat())
+    window._check_expiry()
+    assert "GH_TOKEN" in window.statusBar().currentMessage()

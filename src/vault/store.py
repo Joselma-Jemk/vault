@@ -7,7 +7,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from vault import crypto
@@ -90,11 +90,16 @@ class VaultStore:
         password: str,
         entries: dict[str, Entry],
         projects: dict[str, Project] | None = None,
+        expiries: dict[str, str] | None = None,
+        tags: dict[str, list[str]] | None = None,
     ) -> None:
         self._path = path
         self._password = password
         self._entries = entries
         self._projects = projects or {}
+        # Ces deux tables vivent à côté des entrées : une ancienne version les ignore, sans rien casser.
+        self._expiries = expiries or {}
+        self._tags = tags or {}
 
     # --- ouverture et création -------------------------------------------------
 
@@ -114,9 +119,11 @@ class VaultStore:
             raw = json.loads(plaintext.decode("utf-8"))
             entries = {name: Entry(**data) for name, data in raw["entries"].items()}
             projects = {path_: Project(**data) for path_, data in raw.get("projects", {}).items()}
+            expiries = {str(k): str(v) for k, v in raw.get("expiries", {}).items()}
+            tags = {str(k): [str(t) for t in v] for k, v in raw.get("tags", {}).items()}
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise VaultError("Contenu du coffre illisible") from exc
-        return cls(path, password, entries, projects)
+        return cls(path, password, entries, projects, expiries, tags)
 
     @classmethod
     def exists(cls, path: Path) -> bool:
@@ -240,7 +247,102 @@ class VaultStore:
         if name not in self._entries:
             raise VaultError(f"Entrée inconnue : {name}")
         del self._entries[name]
+        self._expiries.pop(name, None)
+        self._tags.pop(name, None)
         self.save()
+
+    # --- expiration et étiquettes ----------------------------------------------
+
+    def expiry_of(self, name: str) -> str | None:
+        return self._expiries.get(name)
+
+    def set_expiry(self, name: str, date_text: str | None) -> None:
+        """Date d'expiration au format AAAA-MM-JJ, ou None pour l'effacer."""
+        if name not in self._entries:
+            raise VaultError(f"Entrée inconnue : {name}")
+        if date_text is None or date_text == "":
+            self._expiries.pop(name, None)
+        else:
+            try:
+                date.fromisoformat(date_text)
+            except ValueError as exc:
+                raise VaultError("Date invalide : utilise le format AAAA-MM-JJ") from exc
+            self._expiries[name] = date_text
+        self.save()
+
+    def expiring_within(self, days: int, today: date) -> list[tuple[str, str]]:
+        """Entrées déjà expirées ou qui expirent dans `days` jours, les plus proches d'abord."""
+        limit = today + timedelta(days=days)
+        result = []
+        for name, text in self._expiries.items():
+            if name in self._entries and date.fromisoformat(text) <= limit:
+                result.append((name, text))
+        return sorted(result, key=lambda item: item[1])
+
+    def tags_of(self, name: str) -> list[str]:
+        return list(self._tags.get(name, []))
+
+    def set_tags(self, name: str, tags: list[str]) -> None:
+        if name not in self._entries:
+            raise VaultError(f"Entrée inconnue : {name}")
+        cleaned = sorted({t.strip() for t in tags if t.strip()})[:10]
+        if cleaned:
+            self._tags[name] = cleaned
+        else:
+            self._tags.pop(name, None)
+        self.save()
+
+    def all_tags(self) -> list[str]:
+        return sorted({t for tags in self._tags.values() for t in tags})
+
+    # --- sauvegarde et import ----------------------------------------------------
+
+    def export_payload(self) -> dict:
+        """Contenu complet du coffre en clair, à chiffrer avant toute écriture (voir backup.py)."""
+        return {
+            "entries": {name: vars(entry) for name, entry in self._entries.items()},
+            "projects": {path: vars(project) for path, project in self._projects.items()},
+            "expiries": dict(self._expiries),
+            "tags": {name: list(tags) for name, tags in self._tags.items()},
+        }
+
+    def import_payload(self, payload: dict) -> dict[str, list[str]]:
+        """Ajoute au coffre ce qui manque. Une entrée déjà présente n'est jamais écrasée."""
+        added: list[str] = []
+        skipped: list[str] = []
+        for name, data in payload.get("entries", {}).items():
+            try:
+                validate_name(name)
+                entry = Entry(**data)
+            except (VaultError, TypeError):
+                skipped.append(name)
+                continue
+            if name in self._entries or entry.value == "" or len(entry.value) > MAX_VALUE_LENGTH:
+                skipped.append(name)
+                continue
+            self._entries[name] = entry
+            added.append(name)
+            expiry = payload.get("expiries", {}).get(name)
+            if isinstance(expiry, str):
+                try:
+                    date.fromisoformat(expiry)
+                    self._expiries[name] = expiry
+                except ValueError:
+                    pass
+            tags = payload.get("tags", {}).get(name)
+            if isinstance(tags, list):
+                self._tags[name] = [str(t) for t in tags][:10]
+        for path, data in payload.get("projects", {}).items():
+            if path in self._projects or not os.path.isdir(path):
+                continue
+            try:
+                project = Project(**data)
+            except TypeError:
+                continue
+            kept = [n for n in project.entries if n in self._entries]
+            self._projects[path] = Project(entries=kept, created=project.created, updated=project.updated)
+        self.save()
+        return {"added": sorted(added), "skipped": sorted(skipped)}
 
     def mark_used(self, name: str) -> None:
         if name in self._entries:
@@ -261,10 +363,7 @@ class VaultStore:
             raise
 
     def save(self) -> None:
-        raw = {
-            "entries": {name: vars(entry) for name, entry in self._entries.items()},
-            "projects": {path: vars(project) for path, project in self._projects.items()},
-        }
+        raw = self.export_payload()
         plaintext = json.dumps(raw, ensure_ascii=False).encode("utf-8")
         blob = crypto.encrypt(plaintext, self._password)
         self._path.parent.mkdir(parents=True, exist_ok=True)
