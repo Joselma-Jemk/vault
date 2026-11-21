@@ -32,6 +32,14 @@ des entrées qu'il a le droit d'utiliser. Tu ne peux pas enregistrer un projet n
   dans Vault, au lieu d'essayer un autre moyen.
 - `vault list` montre les entrées existantes, pas les projets : pour savoir ce qui est autorisé ici, lance `vault exec`
   et lis le message d'erreur s'il y a lieu.
+- Si le projet n'est pas enregistré, dis exactement quoi faire à l'utilisateur : ouvrir Vault, menu **Outils → Projets
+  (dossiers autorisés)…**, **Ajouter un dossier…**, cocher les entrées nécessaires. Ne propose pas d'autre voie.
+- Si une entrée nécessaire n'existe pas, déclare-la (`vault declare NOM`) puis demande à l'utilisateur de la renseigner.
+  Il peut aussi importer un fichier `.env` complet dans Vault : menu **Outils → Importer un fichier .env…**. Tu ne dois
+  jamais ouvrir ce fichier toi-même, car il contient des valeurs.
+- Les sauvegardes (**Outils → Sauvegarder / Restaurer**), la date d'expiration et les étiquettes sont réservées à
+  l'utilisateur. Tu ne manipules ni les fichiers de sauvegarde, ni leur mot de passe.
+
 
 ## Fichier de références : `.env.vault`
 
@@ -101,7 +109,10 @@ vault gui
 
 - **Vault doit être ouvert et déverrouillé.** Sinon la commande échoue avec « l'application Vault n'est pas ouverte
   ou le coffre est verrouillé ». Dis à l'utilisateur d'ouvrir Vault et de le déverrouiller.
-- **Chaque utilisation demande l'accord de l'utilisateur.** Une fenêtre affiche le projet, la commande exacte et la
+- **Mode confiance.** L'utilisateur peut l'activer dans Vault pour une heure : `vault exec` tourne alors sans demande
+  dans les projets enregistrés. Tu ne peux pas l'activer, et il ne couvre ni `vault run`, ni les entrées hors projet.
+  Ne te fonde jamais dessus pour contourner une demande.
+- **Chaque utilisation demande l'accord de l'utilisateur**, sauf en mode confiance. Une fenêtre affiche le projet, la commande exacte et la
   liste « variable ← entrée » (sans valeurs). Si elle est refusée, la réponse est « Refusé par l'utilisateur » :
   n'insiste pas et ne réessaie pas en boucle. Après 5 refus d'affilée, Vault cesse d'afficher les demandes pendant 2 minutes.
 - **Les valeurs sont masquées.** Toute valeur qui sort dans la sortie devient `***`. Ne la décode pas, ne la
@@ -115,6 +126,8 @@ vault gui
 - Une commande qui écrit la valeur dans un fichier, un journal ou sur le réseau n'est pas protégée par le masquage.
   Ne lance jamais une commande qui fait cela avec un secret du coffre, et refuse-toi si l'utilisateur te le demande.
 - Vault protège contre les fuites et les erreurs, pas contre un programme déjà lancé sous le compte de l'utilisateur.
+- Une clé expirée ou proche de l'expiration est signalée à l'utilisateur par Vault. Ne tente pas de la deviner ni de la
+  faire renouveler toi-même : dis-le-lui.
 
 ## Procédure type
 
