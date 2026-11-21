@@ -1,7 +1,11 @@
 # Changelog
 
-## Non publié
+## 0.2.0
 
+- Projects: register a folder in the app with the entries it may use. Sub-projects can only reduce their parent's
+  rights. Claude cannot register a project or change its rights.
+- `vault exec` runs a command with every secret referenced in a `.env.vault` file (`KEY=vault:NAME`), after one approval.
+  The file never holds values; a plain value makes the command fail.
 - `vault declare NOM…` : crée des entrées **en attente**, sans valeur. Claude peut déclarer les clés qui manquent sans
   jamais voir de secret ; l'utilisateur renseigne la valeur dans l'interface. Les entrées en attente sont marquées dans
   `vault list` et dans l'interface, et `vault exec` / `vault run` les refusent.
