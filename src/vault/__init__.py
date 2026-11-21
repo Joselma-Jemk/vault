@@ -1,3 +1,3 @@
 """Vault : coffre de secrets local, utilisable par l'interface Qt et par la CLI."""
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"

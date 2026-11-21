@@ -1,6 +1,6 @@
 ; Installateur Windows de Vault (Inno Setup 6).
 ; Construit par le CI :
-;   iscc /DAppVersion=0.2.2 /DGuiDir=dist\bin-gui /DCliDir=dist\bin-cli packaging\vault.iss
+;   iscc /DAppVersion=0.2.3 /DGuiDir=dist\bin-gui /DCliDir=dist\bin-cli packaging\vault.iss
 ; GuiDir et CliDir sont les dossiers produits par Nuitka en mode « standalone » (pas de fichier unique).
 ; Sans droits administrateur par défaut (installation pour l'utilisateur courant), droits admin proposés au choix.
 ; Les données de l'utilisateur (%APPDATA%\Vault : coffre chiffré et journal) ne sont JAMAIS supprimées à la désinstallation.

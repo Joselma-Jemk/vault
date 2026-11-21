@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -234,6 +235,10 @@ class Broker:
         }
         if env is not None:
             kwargs["env"] = env
+        if sys.platform == "win32":
+            # L'application est une fenêtre sans console : sans ce drapeau, Windows ouvre un terminal visible,
+            # au premier plan, pour chaque commande lancée. La sortie est de toute façon capturée.
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
             completed = subprocess.run(argv, **kwargs)
         except subprocess.TimeoutExpired:

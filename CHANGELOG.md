@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3
+
+- Correctif : `vault exec` et `vault run` ouvraient un terminal visible, au premier plan, à chaque commande lancée
+  (l'interface n'a pas de console, donc Windows en créait une). La commande tourne maintenant sans fenêtre, sa sortie
+  reste capturée et masquée comme avant.
+
+## 0.2.2
+
+- Outils → Projets : ajouter un dossier, modifier ses droits, retirer un projet, depuis l'interface.
+- Sauvegarde chiffrée du coffre et restauration, avec un mot de passe propre à la sauvegarde.
+- Import d'un fichier `.env` (noms affichés, jamais les valeurs), dates d'expiration avec rappel, étiquettes.
+- Raccourcis clavier, menu des entrées récentes dans la zone de notification, générateur de valeur aléatoire,
+  copie de `NOM=vault:NOM`, notification Windows à chaque demande d'accès.
+
 ## 0.2.1
 
 - Interface : un double-clic sur une entrée ouvre la modification de la valeur (avant, il copiait).
