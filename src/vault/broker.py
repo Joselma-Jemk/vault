@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from vault import audit
-from vault.store import VaultError, VaultStore, validate_name
+from vault.store import VaultError, VaultStore, normalize_dir, validate_name
 
 # Réponses possibles de l'approbation.
 DENY = "refuse"
@@ -30,6 +30,8 @@ SESSION = "temporaire"
 TEMP_GRANT_SECONDS = 600  # « autoriser 10 min » : la même commande ne redemande pas pendant ce temps
 TRUST_SECONDS = 3600  # mode confiance : 1 h, activé seulement depuis l'interface, jamais par Claude
 TRUST_LABEL = "confiance"
+# Actions couvertes par le mode confiance. `run` et `gh-secret` restent toujours soumis à approbation.
+TRUST_ACTIONS = frozenset({"exec", "export_env", "project_add"})
 MAX_CONSECUTIVE_REFUSALS = 5  # après 5 refus d'affilée, les demandes sont refusées sans être affichées
 REFUSAL_COOLDOWN_SECONDS = 120
 
@@ -78,6 +80,10 @@ class Broker:
                 return self._exec(request)
             if action == "declare":
                 return self._declare(request)
+            if action == "project_add":
+                return self._project_add(request)
+            if action == "export_env":
+                return self._export_env(request)
             return _error(f"Action inconnue : {action}")
         except VaultError as exc:
             return _error(str(exc))
@@ -104,6 +110,105 @@ class Broker:
                 result = "existe déjà"
             self._audit("declare", name, "coffre", "auto", result)
         return {"ok": True, "data": {"created": created, "existing": existing}}
+
+    def _project_add(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Enregistre un dossier comme projet. Approbation demandée, sauf en mode confiance.
+
+        Ajoute des droits sans jamais en retirer : si le projet existe déjà, les entrées demandées s'y ajoutent.
+        """
+        directory = request.get("directory")
+        if not isinstance(directory, str) or not directory:
+            raise VaultError("Dossier manquant")
+        path = normalize_dir(directory)
+        _refuse_too_broad(path)
+        if not os.path.isdir(path):
+            raise VaultError(f"Dossier introuvable : {directory}")
+        if request.get("all") is True:
+            names = [row["name"] for row in self._store.list_metadata()]
+        else:
+            raw = request.get("names")
+            if not isinstance(raw, list) or not raw or len(raw) > MAX_MAPPINGS:
+                raise VaultError(f"Indique entre 1 et {MAX_MAPPINGS} noms, ou tout le coffre")
+            names = [validate_name(str(name)) for name in raw]
+        unknown = [name for name in names if name not in self._store]
+        if unknown:
+            raise VaultError(f"Entrée inconnue : {', '.join(unknown)}")
+        if not names:
+            raise VaultError("Le coffre est vide")
+
+        shown = _printable(path)
+        listed = ", ".join(sorted(names))
+        summary = f"Enregistrer le dossier « {shown} » comme projet\nEntrées autorisées : {listed}"
+        label = self._decide(summary, action="project_add", name=",".join(sorted(names)), target=shown)
+        if label is None:
+            return _error(REFUSED_MESSAGE)
+
+        merged = sorted(set(names) | self._existing_entries(path))
+        self._store.set_project(path, merged)
+        self._audit("project_add", ",".join(sorted(names)), shown, label, "ok")
+        return {"ok": True, "data": {"project": path, "entries": merged}}
+
+    def _existing_entries(self, path: str) -> set[str]:
+        for row in self._store.list_projects():
+            if row["path"] == path:
+                return set(row["entries"])  # type: ignore[arg-type]
+        return set()
+
+    def _export_env(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Écrit un fichier .env avec des valeurs en clair, dans le dossier d'un projet enregistré.
+
+        La valeur ne revient jamais à la CLI : elle va seulement dans le fichier.
+        """
+        directory = request.get("project")
+        if not isinstance(directory, str) or not directory:
+            raise VaultError("Dossier du projet manquant")
+        project = self._store.resolve_project(directory)
+        allowed = self._store.effective_entries(project)
+
+        raw = request.get("mapping")
+        if raw is None:
+            mapping = {name: name for name in sorted(allowed) if not self._store.is_pending(name)}
+        else:
+            mapping = _checked_mapping(raw)
+        if not mapping:
+            raise VaultError("Aucune entrée à exporter (liste vide, ou toutes en attente)")
+        for name in mapping.values():
+            if name not in allowed:
+                raise VaultError(f"« {name} » n'est pas autorisée pour le projet {project}")
+            self._require_value(name)
+
+        target = _checked_target(project, directory, request.get("file", ".env"))
+        overwrite = request.get("overwrite") is True
+        if os.path.lexists(target) and not overwrite:
+            raise VaultError(f"{target} existe déjà : ajoute --overwrite pour le remplacer")
+
+        shown = _printable(target)
+        bindings = ", ".join(f"{var} ← {name}" for var, name in sorted(mapping.items()))
+        summary = (
+            f"Projet « {_printable(project)} »\n"
+            f"Écrire {len(mapping)} secret(s) EN CLAIR dans « {shown} »\n"
+            f"Variables : {bindings}"
+        )
+        names = sorted(set(mapping.values()))
+        label = self._decide(summary, action="export_env", name=",".join(names), target=shown)
+        if label is None:
+            return _error(REFUSED_MESSAGE)
+
+        content = "".join(
+            f"{var}={_dotenv_value(self._store.get_value(name))}\n" for var, name in sorted(mapping.items())
+        )
+        try:
+            _write_text(target, content, overwrite)
+        except OSError as exc:
+            self._audit("export_env", ",".join(names), shown, label, "écriture impossible")
+            return _error(f"Écriture impossible : {exc.strerror or exc.__class__.__name__}")
+        self._mark_used(names)
+        self._audit("export_env", ",".join(names), shown, label, "ok")
+        data: dict[str, Any] = {"file": target, "count": len(mapping), "variables": sorted(mapping)}
+        warning = _gitignore_warning(project, target)
+        if warning:
+            data["warning"] = warning
+        return {"ok": True, "data": data}
 
     def _gh_secret(self, request: dict[str, Any]) -> dict[str, Any]:
         name = validate_name(str(request.get("name", "")))
@@ -280,9 +385,9 @@ class Broker:
         key = (action, name, grant_key if grant_key is not None else target)
         self._forget_expired_grants(now)
 
-        # Mode confiance : seulement pour `exec`, dont les entrées sont déjà limitées au projet enregistré.
+        # Mode confiance : `exec`, l'export .env et l'ajout de projet, activé par l'utilisateur seulement.
         # `run` et `gh-secret` restent toujours soumis à approbation.
-        if action == "exec" and now < self._trust_until:
+        if action in TRUST_ACTIONS and now < self._trust_until:
             return TRUST_LABEL
 
         if key in self._grants:
@@ -390,3 +495,60 @@ def _mask_all(text: str | None, secrets: list[str]) -> str:
         for needle in {secret, base64.b64encode(secret.encode("utf-8")).decode("ascii")}:
             text = text.replace(needle, MASK)
     return text
+
+
+def _refuse_too_broad(path: str) -> None:
+    """Un projet couvre tous ses sous-dossiers : refuse une racine de disque, le dossier personnel et ses parents."""
+    if os.path.dirname(path) == path:
+        raise VaultError("Un disque entier ne peut pas être un projet")
+    home = normalize_dir(str(Path.home()))
+    if path == home or home.startswith(path.rstrip(os.sep + "/") + os.sep):
+        raise VaultError("Le dossier personnel (ou l'un de ses parents) est trop large pour être un projet")
+
+
+def _checked_target(project: str, directory: str, file_name: Any) -> str:
+    """Chemin du fichier à écrire : doit rester dans le dossier du projet, sans lien symbolique qui en sorte."""
+    if not isinstance(file_name, str) or not file_name or "\x00" in file_name:
+        raise VaultError("Nom de fichier invalide")
+    candidate = os.path.abspath(os.path.join(directory, file_name))
+    parent = os.path.realpath(os.path.dirname(candidate))
+    root = os.path.normcase(os.path.realpath(project))
+    low = os.path.normcase(parent)
+    if low != root and not low.startswith(root + os.sep):
+        raise VaultError("Le fichier doit rester dans le dossier du projet")
+    if os.path.isdir(candidate):
+        raise VaultError("La cible est un dossier")
+    return os.path.join(parent, os.path.basename(candidate))
+
+
+_PLAIN_VALUE = re.compile(r"^[A-Za-z0-9_./:@+=,%-]+$")
+
+
+def _dotenv_value(value: str) -> str:
+    """Valeur au format .env : brute si elle est simple, sinon entre guillemets avec échappements."""
+    if _PLAIN_VALUE.match(value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def _write_text(target: str, content: str, overwrite: bool) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL) | getattr(os, "O_BINARY", 0)
+    fd = os.open(target, flags, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(content.encode("utf-8"))
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _gitignore_warning(project: str, target: str) -> str | None:
+    """Prévient si le fichier est dans un dépôt git sans règle qui l'ignore (risque de le versionner par erreur)."""
+    if not os.path.isdir(os.path.join(project, ".git")):
+        return None
+    name = os.path.basename(target)
+    try:
+        lines = Path(project, ".gitignore").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    ignored = any(line.strip().lstrip("/") in (name, ".env", ".env*", "*.env") for line in lines)
+    return None if ignored else f"{name} n'est pas dans .gitignore : ne le versionne pas"

@@ -24,6 +24,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     decl.add_argument("names", nargs="+", help="Noms des entrées à déclarer")
 
+    padd = sub.add_parser(
+        "project-add",
+        help="Enregistre un dossier comme projet avec les entrées indiquées (approbation, ou mode confiance)",
+    )
+    padd.add_argument("names", nargs="*", help="Entrées autorisées dans ce projet")
+    padd.add_argument("--all", action="store_true", help="Autorise toutes les entrées du coffre")
+    padd.add_argument("--dir", default=None, help="Dossier à enregistrer (défaut : le dossier courant)")
+
+    exp = sub.add_parser(
+        "export-env",
+        help="Écrit un fichier .env en clair dans le projet (approbation, ou mode confiance). "
+        "Ne lis pas ce fichier : passe-le à l'outil qui en a besoin",
+    )
+    exp.add_argument(
+        "items", nargs="*", help="NOM, ou VARIABLE=NOM pour renommer. Sans argument : toutes les entrées du projet"
+    )
+    exp.add_argument("--file", default=".env", help="Fichier à écrire, dans le dossier du projet (défaut : .env)")
+    exp.add_argument("--overwrite", action="store_true", help="Remplace le fichier s'il existe déjà")
+
     gh = sub.add_parser("gh-secret", help="Pose un secret GitHub Actions avec une valeur du coffre")
     gh.add_argument("name", help="Nom de l'entrée dans le coffre")
     gh.add_argument("--repo", required=True, help="Dépôt cible, au format proprietaire/depot")
@@ -80,6 +99,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _list()
         if args.subcommand == "declare":
             return _declare(args.names)
+        if args.subcommand == "project-add":
+            return _project_add(args.dir, args.names, args.all)
+        if args.subcommand == "export-env":
+            return _export_env(args.items, args.file, args.overwrite)
         if args.subcommand == "gh-secret":
             return _gh_secret(args.name, args.repo)
         if args.subcommand == "exec":
@@ -118,6 +141,48 @@ def _declare(names: list[str]) -> int:
         print(f"Créée en attente : {name} (à renseigner dans Vault)")
     for name in data["existing"]:
         print(f"Déjà présente : {name}")
+    return 0
+
+
+def _project_add(directory: str | None, names: list[str], everything: bool) -> int:
+    if not names and not everything:
+        print("Erreur : indique des entrées, ou --all", file=sys.stderr)
+        return 1
+    payload: dict = {"action": "project_add", "directory": os.path.abspath(directory or os.getcwd())}
+    if everything:
+        payload["all"] = True
+    else:
+        payload["names"] = names
+    reply = _request(payload)
+    if not reply.get("ok"):
+        return _fail(reply)
+    data = reply["data"]
+    print(f"Projet enregistré : {data['project']}")
+    print(f"Entrées autorisées : {', '.join(data['entries'])}")
+    return 0
+
+
+def _export_env(items: list[str], file_name: str, overwrite: bool) -> int:
+    mapping: dict[str, str] | None = None
+    if items:
+        mapping = {}
+        for item in items:
+            var, _, name = item.partition("=")
+            var, name = (var, name) if name else (item, item)
+            if var in mapping:
+                print(f"Erreur : la variable {var} est déjà demandée", file=sys.stderr)
+                return 1
+            mapping[var] = name
+    payload = {"action": "export_env", "project": os.getcwd(), "file": file_name, "overwrite": overwrite}
+    if mapping is not None:
+        payload["mapping"] = mapping
+    reply = _request(payload)
+    if not reply.get("ok"):
+        return _fail(reply)
+    data = reply["data"]
+    print(f"Écrit : {data['file']} ({data['count']} variable(s) : {', '.join(data['variables'])})")
+    if data.get("warning"):
+        print(f"Attention : {data['warning']}", file=sys.stderr)
     return 0
 
 

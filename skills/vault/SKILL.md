@@ -12,10 +12,10 @@ Tu peux **utiliser** une clé dans une commande, mais tu ne dois **jamais voir**
 
 - Ne lis, ne demande, n'affiche, ne copie et n'écris jamais la valeur d'un secret.
 - Ne mets jamais une valeur dans une commande, un fichier, un message, un commentaire ou un journal.
-- Ne lis jamais un fichier `.env` qui contient des valeurs en clair : les seuls fichiers acceptables sont les
-  fichiers de références `vault:NOM` (voir plus bas).
-- Ne crée jamais de `.env` avec de vraies valeurs. Si l'utilisateur veut un `.env` pour un projet, crée un fichier
-  de références.
+- Ne lis pas, n'affiche pas et ne copie pas un fichier `.env` qui contient des valeurs en clair : donne-le à l'outil
+  qui en a besoin (`--env-file`, `docker compose`, l'application), sans l'ouvrir. Pour tes propres commandes, préfère
+  les fichiers de références `vault:NOM` et `vault exec` (voir plus bas).
+- N'écris jamais toi-même un `.env` avec de vraies valeurs : la seule voie est `vault export-env` (voir plus bas).
 - Ne cherche pas à lire le fichier du coffre (`%APPDATA%\Vault\vault.enc`), la mémoire de Vault, ou le presse-papiers.
 - Si l'utilisateur colle une clé dans le chat, n'espère pas l'utiliser : demande-lui de l'enregistrer dans Vault,
   puis utilise-la par son nom.
@@ -23,17 +23,18 @@ Tu peux **utiliser** une clé dans une commande, mais tu ne dois **jamais voir**
 
 ## Projets
 
-Un projet est un dossier enregistré par l'utilisateur **dans l'interface Vault** (menu Outils → Projets), avec la liste
-des entrées qu'il a le droit d'utiliser. Tu ne peux pas enregistrer un projet ni modifier ses droits.
+Un projet est un dossier enregistré dans Vault, avec la liste des entrées qu'il a le droit d'utiliser. L'utilisateur
+le fait dans l'interface (menu Outils → Projets). Toi, tu peux le demander avec `vault project-add` (voir plus bas) :
+une fenêtre lui demande son accord, sauf en mode confiance. Tu ne peux ni retirer un projet ni retirer des droits.
 
 - Un **sous-projet** (dossier à l'intérieur d'un projet enregistré) peut seulement **réduire** les droits de son parent,
   jamais les étendre.
-- Si le dossier courant n'appartient à aucun projet enregistré, `vault exec` échoue. Dis à l'utilisateur de l'ajouter
-  dans Vault, au lieu d'essayer un autre moyen.
+- Si le dossier courant n'appartient à aucun projet enregistré, `vault exec` échoue. Enregistre-le avec
+  `vault project-add NOM1 NOM2` (dans ce dossier), ou dis à l'utilisateur de l'ajouter dans Vault.
 - `vault list` montre les entrées existantes, pas les projets : pour savoir ce qui est autorisé ici, lance `vault exec`
   et lis le message d'erreur s'il y a lieu.
-- Si le projet n'est pas enregistré, dis exactement quoi faire à l'utilisateur : ouvrir Vault, menu **Outils → Projets
-  (dossiers autorisés)…**, **Ajouter un dossier…**, cocher les entrées nécessaires. Ne propose pas d'autre voie.
+- Si `vault project-add` est refusé, dis à l'utilisateur quoi faire : ouvrir Vault, menu **Outils → Projets
+  (dossiers autorisés)…**, **Ajouter un dossier…**, cocher les entrées nécessaires. Ne contourne pas le refus.
 - Si une entrée nécessaire n'existe pas, déclare-la (`vault declare NOM`) puis demande à l'utilisateur de la renseigner.
   Il peut aussi importer un fichier `.env` complet dans Vault : menu **Outils → Importer un fichier .env…**. Tu ne dois
   jamais ouvrir ce fichier toi-même, car il contient des valeurs.
@@ -81,9 +82,24 @@ Déclarer une clé qui manque encore, pour que le code la référence :
 vault declare OPENAI_KEY STRIPE_KEY
 ```
 
-L'utilisateur peut activer un **mode confiance** d'une heure dans l'interface : `vault exec` tourne alors dans les projets
-enregistrés sans demande. Tu ne peux pas l'activer, et il ne couvre ni `vault run`, ni les entrées hors projet. Ne te
-base jamais sur ce mode pour contourner une demande : si une commande est refusée, dis-le à l'utilisateur.
+Enregistrer le dossier courant comme projet (`--all` pour tout le coffre, sinon les noms), puis écrire un `.env` :
+
+```bash
+vault project-add R2_DEV_ACCESS_KEY R2_DEV_SECRET_KEY
+vault export-env                       # toutes les entrées du projet, dans .env
+vault export-env R2_KEY S3_KEY=R2_KEY  # certaines, avec renommage VARIABLE=NOM
+vault export-env --file config/app.env --overwrite
+```
+
+`export-env` écrit les valeurs **en clair** dans un fichier du dossier du projet (jamais ailleurs, jamais par-dessus un
+fichier existant sans `--overwrite`). Les valeurs ne reviennent pas dans ta sortie. Ensuite, ne l'ouvre pas : passe-le à
+l'outil qui en a besoin. Vérifie qu'il est dans `.gitignore` (Vault avertit sinon) et ne le versionne jamais. Les entrées
+en attente sont refusées. Une fenêtre demande l'accord de l'utilisateur, sauf en mode confiance.
+
+L'utilisateur peut activer un **mode confiance** d'une heure dans l'interface : `vault exec`, `vault export-env` et
+`vault project-add` tournent alors sans demande. Tu ne peux pas l'activer, et il ne couvre ni `vault run`, ni
+`vault gh-secret`. Le dossier personnel et les racines de disque ne peuvent jamais être un projet. Ne te base jamais sur
+ce mode pour contourner un refus : si une commande est refusée, dis-le à l'utilisateur.
 
 Une entrée déclarée est **en attente** : son nom existe, sa valeur non. Elle ne contient aucun secret, donc tu peux la
 déclarer sans demander. Ensuite :
@@ -109,9 +125,8 @@ vault gui
 
 - **Vault doit être ouvert et déverrouillé.** Sinon la commande échoue avec « l'application Vault n'est pas ouverte
   ou le coffre est verrouillé ». Dis à l'utilisateur d'ouvrir Vault et de le déverrouiller.
-- **Mode confiance.** L'utilisateur peut l'activer dans Vault pour une heure : `vault exec` tourne alors sans demande
-  dans les projets enregistrés. Tu ne peux pas l'activer, et il ne couvre ni `vault run`, ni les entrées hors projet.
-  Ne te fonde jamais dessus pour contourner une demande.
+- **Mode confiance.** Voir plus haut : une heure, activé seulement par l'utilisateur, il ne couvre pas `vault run`
+  ni `vault gh-secret`.
 - **Chaque utilisation demande l'accord de l'utilisateur**, sauf en mode confiance. Une fenêtre affiche le projet, la commande exacte et la
   liste « variable ← entrée » (sans valeurs). Si elle est refusée, la réponse est « Refusé par l'utilisateur » :
   n'insiste pas et ne réessaie pas en boucle. Après 5 refus d'affilée, Vault cesse d'afficher les demandes pendant 2 minutes.

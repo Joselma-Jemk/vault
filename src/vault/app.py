@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
         tools.addAction(_action(self, "Changer le mot de passe maître…", self._change_password))
         tools.addAction(_action(self, "Journal des demandes…", self._show_audit))
         tools.addSeparator()
-        self._trust = QAction("Mode confiance : 1 h sans demande pour les projets", self)
+        self._trust = QAction("Mode confiance : 1 h sans demande (exec, export .env, projets)", self)
         self._trust.setCheckable(True)
         self._trust.toggled.connect(self._toggle_trust)
         tools.addAction(self._trust)
@@ -924,8 +924,12 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Vault : mode confiance",
-            "Pendant 1 heure, Claude pourra lancer « vault exec » dans les projets enregistrés sans te demander.\n\n"
-            "Restent soumis à approbation : les entrées hors projet, « vault run » et la copie.\n"
+            "Pendant 1 heure, Claude pourra SANS te demander :\n"
+            "• lancer « vault exec » dans les projets enregistrés ;\n"
+            "• enregistrer de nouveaux dossiers comme projets, avec les entrées de son choix ;\n"
+            "• écrire un fichier .env avec les valeurs EN CLAIR dans un projet (il pourra alors le lire).\n\n"
+            "Restent soumis à approbation : « vault run », « vault gh-secret » et la copie.\n"
+            "Le dossier personnel et les racines de disque ne peuvent jamais être un projet.\n"
             "Le mode s'arrête à la fin de l'heure ou au verrouillage.\n\nActiver ?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -935,7 +939,7 @@ class MainWindow(QMainWindow):
             return
         broker.enable_trust(TRUST_SECONDS)
         self._trust_timer.start(TRUST_SECONDS * 1000)
-        self.statusBar().showMessage("Mode confiance actif pendant 1 h (vault exec dans les projets).")
+        self.statusBar().showMessage("Mode confiance actif pendant 1 h (exec, export .env, ajout de projets).")
 
     def _trust_expired(self) -> None:
         self._set_trust_checked(False)

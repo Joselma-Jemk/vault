@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- `vault export-env` : écrit un fichier `.env` avec les valeurs en clair dans le dossier d'un projet enregistré (jamais ailleurs, jamais par-dessus un fichier existant sans `--overwrite`), avec renommage `VARIABLE=NOM` et avertissement si `.gitignore` ne l'ignore pas.
+- `vault project-add` : enregistre un dossier comme projet avec les entrées choisies (ou `--all`). Le dossier personnel, ses parents et les racines de disque sont refusés. Les droits s'ajoutent, ne se retirent jamais.
+- Ces deux commandes demandent l'accord de l'utilisateur, sauf pendant le mode confiance (1 h), qui les couvre maintenant avec `vault exec`. `vault run` et `vault gh-secret` restent toujours soumis à approbation.
+- Le texte de confirmation du mode confiance détaille ce qu'il permet.
+
 ## 0.2.3
 
 - Correctif : `vault exec` et `vault run` ouvraient un terminal visible, au premier plan, à chaque commande lancée
